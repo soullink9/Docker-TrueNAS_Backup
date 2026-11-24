@@ -12,10 +12,11 @@ app/
   truenas_api.py           TrueNAS JSON-RPC 2.0 WebSocket client
   notify.py                Home Assistant webhook
   healthcheck.py           Docker healthcheck
-homeassistant/             the Home Assistant helper and automations
+homeassistant/             the Home Assistant blueprint (imported by URL)
 tests/                     unit tests (standard library unittest, no TrueNAS needed)
 docs/assets/icon.svg       repo icon (source); icon.png is the 512 px render
-.gitea/workflows/build.yml build, test, publish, release
+.gitea/workflows/build.yml build, test, publish, release on Gitea
+.github/workflows/build.yml the same on GitHub (ghcr.io), for a push mirror
 Dockerfile
 VERSION                    the version, and the only place it is written
 ```
@@ -47,6 +48,12 @@ On every push to `main`, the workflow on Gitea:
 So to release, bump `VERSION` in the same commit as the change. A version tag is pushed only once and never changes afterwards.
 
 Pull requests are built and tested but nothing is published.
+
+## Publishing on GitHub too
+
+If the Gitea repo is push-mirrored to GitHub, `.github/workflows/build.yml` does the same there: it tests, pushes `ghcr.io/<owner>/docker-truenas_backup` (`:latest`, `:sha-<commit>`, `:X.Y.Z`) and creates the GitHub release for a new `VERSION`. It uses the built-in `GITHUB_TOKEN`, so there is nothing to configure. The first push creates the package as private: make it public once under the package's settings on GitHub, since `compose.example.yaml` pulls from there by default.
+
+The two workflows never both run in one place: Gitea ignores `.github/workflows` when `.gitea/workflows` exists, GitHub never reads `.gitea/`, and the GitHub job also checks it is running on github.com.
 
 ## Workflow settings in Gitea
 

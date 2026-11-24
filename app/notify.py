@@ -2,7 +2,7 @@
 Sends the result of a run to a Home Assistant webhook.
 
 The JSON body is {"status", "title", "message", "source", "target"}, where
-status is success, failure, warning or test. The Home Assistant automation in
+status is success, failure, warning or test. The Home Assistant blueprint in
 homeassistant/truenas-backup.yaml pushes everything except success to a
 phone, and records successes so a missed run can be noticed.
 """

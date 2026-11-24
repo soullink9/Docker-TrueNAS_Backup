@@ -1,19 +1,58 @@
 # Home Assistant
 
-The container posts every result to a Home Assistant webhook as JSON:
+The alerts are one automation, shipped as a blueprint: [`homeassistant/truenas-backup.yaml`](../homeassistant/truenas-backup.yaml). It needs Home Assistant **2026.11** or later and the Companion app on your phone.
+
+It does three things:
+
+- **Failures, warnings and tests** from the container are pushed to the phone you pick, as time-sensitive notifications.
+- **Successes** are recorded in a helper, and pushed too if you turn that on.
+- **Missed runs**: on the days and time you choose (Mondays at 8:00 AM by default), it alerts you if no success was recorded in the last 12 hours. That catches what the container can't report itself: the primary down, the app stopped, the container crashed.
+
+## Set it up
+
+1. **Import the blueprint.** Settings > Automations & scenes > Blueprints > **Import blueprint**, and paste its URL. From GitHub (the default):
+
+   ```
+   https://github.com/soullink9/Docker-TrueNAS_Backup/blob/main/homeassistant/truenas-backup.yaml
+   ```
+
+   Or from your Gitea, if Home Assistant can read it without logging in:
+
+   ```
+   https://<your-gitea-host>/soullink9/Docker-TrueNAS_Backup/raw/branch/main/homeassistant/truenas-backup.yaml
+   ```
+
+   Neither reachable? Copy the file to `/config/blueprints/automation/truenas-backup/truenas-backup.yaml` and reload blueprints.
+2. **Create the helper** (for the missed-run check): Settings > Devices & services > Helpers > Create helper > Date and/or time > **Date and time**, named `TrueNAS backup last success`.
+3. **Create the automation** from the blueprint (Blueprints > TrueNAS weekly backup alerts > Create automation) and fill in:
+
+   | Field | What to put |
+   |-------|-------------|
+   | Webhook ID | A long random ID, e.g. `truenas-backup-` plus 20 random characters. Treat it like a password. |
+   | Phone to notify | Your phone (any Companion app device) |
+   | Also notify on success | Off for failures only, on for every run |
+   | Last success helper | The helper from step 2. Empty turns the missed-run check off. |
+   | Check on / Check at | The days `BACKUP_SCHEDULE` runs, and a time by which it should be done |
+   | Counts as missed after | How old the last success may be at check time. Default 12 h. |
+
+4. **Point the container at it**: set `HA_WEBHOOK_URL` in `.env` to `http://<home-assistant-ip>:8123/api/webhook/<your-webhook-id>`, recreate the container, and run:
+
+   ```
+   docker exec truenas-backup backup --test-notify
+   ```
+
+   A "TrueNAS backup test" notification should arrive.
+
+The webhook only accepts requests from your local network (`local_only`); the primary is on the same network.
+
+## Updating the blueprint
+
+Home Assistant remembers the URL it was imported from (the file itself also names the GitHub copy as its source). After a new release, open Settings > Automations & scenes > Blueprints, use the blueprint's menu > **Re-import blueprint**, and the automation picks up the change. Your field values stay as they are.
+
+## What the container sends
 
 ```json
 {"status": "failure", "title": "TrueNAS backup failed", "message": "Replication failed: ...", "source": "<container host>", "target": "backup TrueNAS"}
 ```
 
-`status` is `success`, `failure`, `warning` (replication worked but the box didn't power off) or `test`. Everything is in [`homeassistant/truenas-backup.yaml`](../homeassistant/truenas-backup.yaml).
-
-## Set it up
-
-1. **Helper.** Settings > Devices & services > Helpers > Create helper > Date and/or time > "Date and time", named `TrueNAS backup last success` (entity `input_datetime.truenas_backup_last_success`).
-2. **Webhook id.** Pick a long random one, e.g. `truenas-backup-` plus 20 random characters. Anyone on your LAN who knows it can trigger the automation, so treat it like a password.
-3. **Automation 1, result.** Settings > Automations & scenes > Create automation > Edit in YAML, paste the first automation. Replace `truenas-backup-CHANGE-ME` with your webhook id and `notify.mobile_app_YOUR_PHONE` with your phone's notify action (Developer tools > Actions, search `mobile_app`). It records successes in the helper and pushes everything else to your phone.
-4. **Automation 2, missed run.** A second automation from the commented block at the end of the file, same notify action. On Mondays at 8:00 AM it alerts you if no success arrived in the last 12 hours. That catches what the container can't report itself: the primary down, the app stopped, the container crashed. If you change `BACKUP_SCHEDULE`, move its day and time to match.
-5. **Set `HA_WEBHOOK_URL`** in `.env` to `http://<home-assistant-ip>:8123/api/webhook/<your-webhook-id>`, recreate the container, and run `docker exec truenas-backup backup --test-notify`.
-
-The webhook is `local_only`, so it only accepts requests from your LAN; the primary is on the same network.
+`status` is `success`, `failure`, `warning` (replication worked but the box didn't shut down) or `test`.

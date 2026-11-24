@@ -1,7 +1,7 @@
 """
 A minimal client for the TrueNAS SCALE API (JSON-RPC 2.0 over WebSocket).
 
-TrueNAS SCALE 25.04 and later serve this API at wss://<host>/api/current.
+TrueNAS SCALE 25.10 serves this API at wss://<host>/api/current.
 Every call here opens its own connection, logs in with the API key, makes its
 requests and closes it again. A replication can run for hours; short separate
 connections survive a restarted middleware or a network blip far better than

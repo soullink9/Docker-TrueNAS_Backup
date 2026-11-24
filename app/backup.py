@@ -34,7 +34,6 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -65,6 +64,8 @@ FAILED_JOB_STATES = {"FAILED", "ABORTED"}
 
 @dataclass
 class Outcome:
+    """The result of one cycle; it is what Home Assistant receives."""
+
     status: str          # success | failure | warning
     title: str
     message: str
@@ -75,6 +76,12 @@ class Outcome:
 
 
 class TaskFailed(Exception):
+    """One replication task failed.
+
+    retry=False marks failures a retry cannot fix (unknown task name, or a
+    replication that is still running). still_running=True means TrueNAS may
+    still be replicating, so the backup box must not be powered off.
+    """
 
     def __init__(self, reason: str, retry: bool = True, still_running: bool = False):
         super().__init__(reason)
@@ -87,37 +94,23 @@ class Aborted(Exception):
     """Stops the cycle early; carries the reason."""
 
 
-def date_ms(value) -> int:
-    """TrueNAS dates come as {"$date": ms}, an ISO string, or a number."""
-
-    if isinstance(value, dict):
-        value = value.get("$date")
-
-    if isinstance(value, (int, float)):
-        return int(value)
-
-    if isinstance(value, str):
-        try:
-            return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
-        except ValueError:
-            return 0
-
-    return 0
-
-
 class BackupCycle:
+    """Runs the five steps of one backup (see the module docstring).
+
+    power, api and notifier are a power.Power, a truenas_api.TrueNAS (the
+    primary) and a notify.Notifier; sleep and clock are injectable so the
+    tests can run a 12-hour replication in milliseconds.
+    """
 
     def __init__(self, s: settings_module.Settings, power, api, notifier,
                  sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.monotonic,
-                 wall: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.monotonic):
         self.s = s
         self.power = power
         self.api = api
         self.notifier = notifier
         self.sleep = sleep
         self.clock = clock
-        self.wall = wall
         self.started = 0.0
         self.was_on = False
         self.still_running = False
@@ -182,7 +175,6 @@ class BackupCycle:
             raise TaskFailed(f"no replication task named '{name}' exists on the primary", retry=False)
 
         task_id = task["id"]
-        started_ms = int(self.wall() * 1000)
 
         log.info("Starting replication task '%s' (id %s).", name, task_id)
 
@@ -234,13 +226,9 @@ class BackupCycle:
             task_state = {}
 
         state = task_state.get("state")
-        when = date_ms(task_state.get("datetime"))
 
         if state and state != "FINISHED":
             raise TaskFailed(f"'{name}' ended in state {state}: {task_state.get('error') or 'no error text'}")
-
-        if when and when < started_ms - 60_000:
-            log.warning("'%s' reports FINISHED, but from before this run.", name)
 
         log.info("Replication '%s' finished.", name)
 

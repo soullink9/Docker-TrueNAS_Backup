@@ -1,6 +1,6 @@
 # Setup
 
-Everything runs on the **primary** TrueNAS (SCALE 25.04 or later).
+Everything runs on the **primary** TrueNAS. Supported: TrueNAS SCALE **25.10** or later on both boxes, and Home Assistant **2026.11** or later.
 
 ## How the backup box is switched on and off
 
@@ -70,19 +70,20 @@ On TrueNAS: **Apps > Discover Apps > Custom App > Install via YAML** (or any com
 ```yaml
 services:
   truenas-backup:
-    image: <your-gitea-host>/<owner>/docker-truenas_backup:latest
+    image: ${TRUENAS_BACKUP_IMAGE:-ghcr.io/soullink9/docker-truenas_backup:latest}
     container_name: truenas-backup
     restart: unless-stopped
     network_mode: host
-    env_file: /mnt/tank/apps/truenas-backup/.env
+    env_file: /mnt/tank/apps/truenas-backup/truenas-backup.env
     environment:
       TZ: America/New_York
       BACKUP_SCHEDULE: "0 1 * * mon"
 ```
 
+- **Image**: by default it pulls `ghcr.io/soullink9/docker-truenas_backup` from GitHub. To pull from your own Gitea instead, set `TRUENAS_BACKUP_IMAGE`, e.g. `gitea.example.com/soullink9/docker-truenas_backup:latest`, in the shell or in a `.env` file next to the compose file (Compose reads that file for `${...}` values; it is not the container's settings file). On the TrueNAS Apps screen, just edit the `image:` line.
 - **`network_mode: host`** is needed: Wake-on-LAN broadcasts must reach the LAN, and the API is reached at `127.0.0.1`.
-- **`env_file`**: copy [`.env.example`](../.env.example) to a dataset (e.g. `/mnt/tank/apps/truenas-backup/.env`), fill it in, and make it readable by root only (`chmod 600`). It holds the API keys and the IPMI password.
-- **Pulling from Gitea**: if the package is private, add your Gitea registry with a token that has `read:package` under **Apps > Configuration > Manage Container Images / Docker Registries**, or run `docker login <your-gitea-host>` on the primary.
+- **`env_file`**: copy [`.env.example`](../.env.example) to a dataset (e.g. `/mnt/tank/apps/truenas-backup/truenas-backup.env`), fill it in, and make it readable by root only (`chmod 600`). It holds the API keys and the IPMI password.
+- **Private registry**: if the Gitea (or GitHub) package is private, add the registry with a token that has `read:package` under **Apps > Configuration > Manage Container Images / Docker Registries**, or run `docker login <your-gitea-host>` on the primary.
 
 ## 5. Settings
 
@@ -97,7 +98,6 @@ services:
 | `POWER_ON_ORDER` | `ipmi,wol` | Power-on methods to try, in order. Unconfigured ones are skipped. |
 | `POWER_OFF_ORDER` | `api,ipmi` | Shutdown methods to try, in order. Unconfigured ones are skipped. |
 | `IPMI_HOST`, `IPMI_USER`, `IPMI_PASSWORD` | empty | Optional. The BMC's IP and the Operator user; all three or none. |
-| `IPMI_INTERFACE` | `lanplus` | ipmitool interface; `lan` only for very old BMCs. |
 | `WOL_MAC`, `WOL_BROADCAST` | empty, `255.255.255.255` | Optional Wake-on-LAN. Use your LAN's broadcast, e.g. `192.168.1.255`. |
 | `BACKUP_TRUENAS_URL`, `BACKUP_TRUENAS_API_KEY` | empty | Optional. The backup box's own API, for `api` shutdown: `wss://<backup-box-IP>/api/current` and a key made on the backup box. Both or neither. |
 | `BACKUP_TRUENAS_VERIFY_TLS` | `false` | `true` only if the backup box has a trusted certificate. |

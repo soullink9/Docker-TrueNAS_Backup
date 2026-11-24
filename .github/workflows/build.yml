@@ -1,0 +1,118 @@
+# GitHub copy of the build (for when the Gitea repo is push-mirrored to GitHub).
+# Builds the image, runs the tests inside it, and publishes it to the GitHub
+# Container Registry (ghcr.io), the default image in compose.example.yaml.
+#
+#   every push to main     -> ghcr.io/<owner>/docker-truenas_backup:latest and :sha-<commit>
+#   new version in VERSION -> also :<version> and a vX.Y.Z GitHub release
+#   pull request           -> build and test only, nothing published
+#
+# Needs nothing to be set up: GITHUB_TOKEN can push packages and create
+# releases with the permissions below. The first push creates the package as
+# private; make it public once under the package's settings on GitHub.
+#
+# Gitea runs .gitea/workflows/build.yml instead: it ignores .github/workflows
+# when .gitea/workflows exists, and the job below also checks it is on GitHub.
+
+name: Build image
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write     # create the release
+  packages: write     # push to ghcr.io
+
+jobs:
+  build:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Work out the version and image name
+        id: meta
+        run: |
+          # VERSION is the only place the version is written down.
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION must look like 1.2.3, found '$version'" >&2
+            exit 1
+          fi
+
+          # Image names must be lowercase.
+          image="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+
+          {
+            echo "version=$version"
+            echo "image=$image"
+            echo "short_sha=${GITHUB_SHA:0:7}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Version $version, image $image"
+
+      - name: Run the tests
+        # The Dockerfile's test stage runs the unit tests in the real image.
+        run: docker build --target test .
+
+      - name: Build the image
+        # The source label links the package to this repository on GitHub.
+        run: >
+          docker build
+          --build-arg VERSION=${{ steps.meta.outputs.version }}
+          --label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          --tag ${{ steps.meta.outputs.image }}:latest
+          --tag ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
+          .
+
+      - name: Is this version already released?
+        id: release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.meta.outputs.version }}" >/dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "v${{ steps.meta.outputs.version }} is already released; publishing latest only."
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            echo "v${{ steps.meta.outputs.version }} is new; it will be released."
+          fi
+
+      - name: Push the image
+        if: steps.release.outcome == 'success'
+        run: |
+          image="${{ steps.meta.outputs.image }}"
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          docker push "$image:latest"
+          docker push "$image:sha-${{ steps.meta.outputs.short_sha }}"
+
+          # The version tag is pushed once, with the release, so it never
+          # changes after people start using it.
+          if [ "${{ steps.release.outputs.new }}" = "true" ]; then
+            docker tag "$image:latest" "$image:${{ steps.meta.outputs.version }}"
+            docker push "$image:${{ steps.meta.outputs.version }}"
+          fi
+
+          docker logout ghcr.io
+
+      - name: Create the release
+        if: steps.release.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          gh release create "v$version" \
+            --target "$GITHUB_SHA" \
+            --title "v$version" \
+            --notes "Image: \`${{ steps.meta.outputs.image }}:$version\`
+
+          See docs/setup.md for how to run it."

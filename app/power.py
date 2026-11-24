@@ -72,7 +72,7 @@ class Power:
             return False, "IPMI is not configured"
 
         cmd = [
-            "ipmitool", "-I", self.s.ipmi_interface,
+            "ipmitool", "-I", "lanplus",
             "-H", self.s.ipmi_host, "-U", self.s.ipmi_user,
             "-E",                                # password from IPMI_PASSWORD, not argv
             *args,

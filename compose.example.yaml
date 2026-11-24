@@ -4,15 +4,19 @@
 
 services:
   truenas-backup:
-    image: <your-gitea-host>/<owner>/docker-truenas_backup:latest
+    # Pulls from GitHub by default. To pull from your own Gitea registry
+    # instead, set TRUENAS_BACKUP_IMAGE (in the shell, or in a .env file next
+    # to this compose file), e.g.
+    #   TRUENAS_BACKUP_IMAGE=gitea.example.com/soullink9/docker-truenas_backup:latest
+    image: ${TRUENAS_BACKUP_IMAGE:-ghcr.io/soullink9/docker-truenas_backup:latest}
     container_name: truenas-backup
     restart: unless-stopped
     # Host networking: Wake-on-LAN broadcasts must reach the LAN, and the
     # container reaches the primary's own API at 127.0.0.1.
     network_mode: host
-    # Secrets: see .env.example. Use an absolute path on a pool dataset when
-    # installing through the TrueNAS Apps screen.
-    env_file: /mnt/tank/apps/truenas-backup/.env
+    # The settings and secrets: see .env.example. Use an absolute path on a
+    # pool dataset when installing through the TrueNAS Apps screen.
+    env_file: /mnt/tank/apps/truenas-backup/truenas-backup.env
     environment:
       TZ: America/New_York            # BACKUP_SCHEDULE uses this time zone
       BACKUP_SCHEDULE: "0 1 * * mon"  # Mondays at 1:00 AM (cron syntax)

@@ -113,7 +113,7 @@ def make(power=None, api=None, **env):
     clock = Clock()
     cycle = backup.BackupCycle(
         s, power or FakePower(), api or FakeApi(), FakeNotifier(),
-        sleep=clock.sleep, clock=clock.time, wall=clock.time,
+        sleep=clock.sleep, clock=clock.time,
     )
     return cycle
 
@@ -226,16 +226,6 @@ class CycleTest(unittest.TestCase):
         api = FakeApi(tasks={"A": 1, "B": 2}, job_states=["SUCCESS", "SUCCESS"])
         make(api=api, REPLICATION_TASKS="A,B").run()
         self.assertEqual(api.runs, [1, 2])
-
-
-class DateTest(unittest.TestCase):
-
-    def test_date_forms(self):
-        self.assertEqual(backup.date_ms({"$date": 1234}), 1234)
-        self.assertEqual(backup.date_ms(5678), 5678)
-        self.assertEqual(backup.date_ms("1970-01-01T00:00:01Z"), 1000)
-        self.assertEqual(backup.date_ms(None), 0)
-        self.assertEqual(backup.date_ms("garbage"), 0)
 
 
 if __name__ == "__main__":

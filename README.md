@@ -14,7 +14,7 @@ One small container that runs on the **primary** TrueNAS and looks after a **bac
 2. waits for it to boot,
 3. runs your existing replication task(s) through the primary's TrueNAS API and checks they finished,
 4. shuts the backup box down cleanly through its own TrueNAS API and/or an IPMI soft power-off, and checks it is off,
-5. tells Home Assistant how it went. Failures go to your phone; a second automation warns you if a Monday run never reports back.
+5. tells Home Assistant how it went. A blueprint you import by URL pushes failures to your phone and warns you if a run never reports back.
 
 ```yaml
 environment:
@@ -25,5 +25,5 @@ environment:
 ## Learn more
 
 - [Setup](docs/setup.md): preparing both boxes, the API key, compose, every setting, running it by hand
-- [Home Assistant](docs/home-assistant.md): the webhook, phone alerts and the missed-run check
+- [Home Assistant](docs/home-assistant.md): the blueprint, phone alerts and the missed-run check
 - [Development](docs/development.md): building, tests, versions and releases

@@ -45,7 +45,6 @@ class Settings:
     ipmi_host: str = ""
     ipmi_user: str = ""
     ipmi_password: str = ""
-    ipmi_interface: str = "lanplus"
     wol_mac: str = ""
     wol_broadcast: str = "255.255.255.255"
     power_on_order: list[str] = field(default_factory=lambda: list(POWER_ON_METHODS))
@@ -208,7 +207,6 @@ def load(env: Mapping[str, str] | None = None) -> tuple[Settings, list[str]]:
         ipmi_host=_str(env, "IPMI_HOST"),
         ipmi_user=_str(env, "IPMI_USER"),
         ipmi_password=env.get("IPMI_PASSWORD", ""),
-        ipmi_interface=_str(env, "IPMI_INTERFACE", "lanplus"),
         wol_mac=_str(env, "WOL_MAC"),
         wol_broadcast=_str(env, "WOL_BROADCAST", "255.255.255.255"),
         power_on_order=parse_order(env, "POWER_ON_ORDER", POWER_ON_METHODS, problems),
