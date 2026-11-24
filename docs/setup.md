@@ -74,15 +74,16 @@ services:
     container_name: truenas-backup
     restart: unless-stopped
     network_mode: host
-    env_file: /mnt/tank/apps/truenas-backup/truenas-backup.env
+    env_file: .env
     environment:
       TZ: America/New_York
       BACKUP_SCHEDULE: "0 1 * * mon"
 ```
 
-- **Image**: by default it pulls `ghcr.io/soullink9/docker-truenas_backup` from GitHub. To pull from your own Gitea instead, set `TRUENAS_BACKUP_IMAGE`, e.g. `gitea.example.com/soullink9/docker-truenas_backup:latest`, in the shell or in a `.env` file next to the compose file (Compose reads that file for `${...}` values; it is not the container's settings file). On the TrueNAS Apps screen, just edit the `image:` line.
+- **One `.env` file**: copy [`.env.example`](../.env.example) to `.env` next to the compose file, fill it in, and make it readable by root only (`chmod 600`): it holds the API keys and the IPMI password. Compose reads it for the image name, and `env_file` passes it to the container as its settings.
+- **Image**: by default it pulls `ghcr.io/soullink9/docker-truenas_backup` from GitHub. To pull from your own Gitea, uncomment `TRUENAS_BACKUP_IMAGE` at the top of `.env`.
+- **TrueNAS Apps screen** (Install via YAML): there is no project folder, so put `.env` on a pool dataset, set `env_file` to its absolute path (e.g. `/mnt/tank/apps/truenas-backup/.env`), and for Gitea edit the `image:` line directly.
 - **`network_mode: host`** is needed: Wake-on-LAN broadcasts must reach the LAN, and the API is reached at `127.0.0.1`.
-- **`env_file`**: copy [`.env.example`](../.env.example) to a dataset (e.g. `/mnt/tank/apps/truenas-backup/truenas-backup.env`), fill it in, and make it readable by root only (`chmod 600`). It holds the API keys and the IPMI password.
 - **Private registry**: if the Gitea (or GitHub) package is private, add the registry with a token that has `read:package` under **Apps > Configuration > Manage Container Images / Docker Registries**, or run `docker login <your-gitea-host>` on the primary.
 
 ## 5. Settings
