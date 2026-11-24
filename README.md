@@ -22,6 +22,12 @@ environment:
   BACKUP_SCHEDULE: "0 1 * * mon"   # cron syntax
 ```
 
+## Home Assistant alerts
+
+[![Open your Home Assistant instance and show the blueprint import dialog with this blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fsoullink9%2FDocker-TrueNAS_Backup%2Fblob%2Fmain%2Fhomeassistant%2Ftruenas-backup.yaml)
+
+Imports the alert blueprint from GitHub into Home Assistant 2026.11 or later. To import it from your own Gitea instead, see [Home Assistant](docs/home-assistant.md).
+
 ## Learn more
 
 - [Setup](docs/setup.md): preparing both boxes, the API key, compose, every setting, running it by hand

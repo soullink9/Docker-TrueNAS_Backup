@@ -10,7 +10,11 @@ It does three things:
 
 ## Set it up
 
-1. **Import the blueprint.** Settings > Automations & scenes > Blueprints > **Import blueprint**, and paste its URL. From GitHub (the default):
+1. **Import the blueprint.** The quickest way is this button, which opens your Home Assistant with the GitHub copy filled in:
+
+   [![Open your Home Assistant instance and show the blueprint import dialog with this blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fsoullink9%2FDocker-TrueNAS_Backup%2Fblob%2Fmain%2Fhomeassistant%2Ftruenas-backup.yaml)
+
+   Or go to Settings > Automations & scenes > Blueprints > **Import blueprint** and paste a URL. From GitHub (the default):
 
    ```
    https://github.com/soullink9/Docker-TrueNAS_Backup/blob/main/homeassistant/truenas-backup.yaml
