@@ -2,9 +2,17 @@
 # Builds the image, runs the tests inside it, and publishes it to the GitHub
 # Container Registry (ghcr.io), the default image in compose.example.yaml.
 #
-#   every push to main     -> ghcr.io/<owner>/docker-truenas_backup:latest and :sha-<commit>
-#   new version in VERSION -> also :<version> and a vX.Y.Z GitHub release
-#   pull request           -> build and test only, nothing published
+#   VERSION not yet released on GitHub -> build, push :latest, :sha-<commit>
+#                                         and :<version>, create vX.Y.Z release
+#   already released, code changed     -> build, push :latest and :sha-<commit>
+#   already released, only docs/*.md   -> nothing to do
+#   pull request                       -> build and test only, nothing published
+#
+# Catch-up: a mirror push can carry several commits at once, and only the
+# newest one runs. Deciding by "is VERSION released here yet?" instead of by
+# the files in the last commit means a release is never missed, even when
+# that newest commit only touches docs. Versions skipped over in between are
+# not built: the current one supersedes them.
 #
 # Needs nothing to be set up: GITHUB_TOKEN can push packages and create
 # releases with the permissions below. The first push creates the package as
@@ -15,8 +23,6 @@
 
 name: Build image
 
-# No paths filter on purpose: a mirror push that creates main on GitHub has
-# no diff to filter, and with paths-ignore GitHub would skip it (no release).
 on:
   push:
     branches: [main]
@@ -35,9 +41,15 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # the whole history, to see what a push changed
 
-      - name: Work out the version and image name
-        id: meta
+      - name: Decide what to build
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
         run: |
           # VERSION is the only place the version is written down.
           version="$(tr -d '[:space:]' < VERSION)"
@@ -46,72 +58,73 @@ jobs:
             exit 1
           fi
 
-          # Image names must be lowercase.
-          image="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          new=false
+          build=true
+
+          if [ "$EVENT" != "pull_request" ]; then
+            if ! gh release view "v$version" >/dev/null 2>&1; then
+              new=true
+              echo "v$version is not released on GitHub yet: building and releasing it."
+            elif [ "$EVENT" = "push" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null \
+                 && ! git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -Eqv '^docs/|\.md$'; then
+              build=false
+              echo "v$version is released and this push only changed docs: nothing to build."
+            else
+              echo "v$version is released: building :latest from this push."
+            fi
+          fi
 
           {
             echo "version=$version"
-            echo "image=$image"
+            echo "new=$new"
+            echo "build=$build"
+            echo "image=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
             echo "short_sha=${GITHUB_SHA:0:7}"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Version $version, image $image"
-
       - name: Run the tests
         # The Dockerfile's test stage runs the unit tests in the real image.
+        if: steps.plan.outputs.build == 'true'
         run: docker build --target test .
 
       - name: Build the image
         # The source label links the package to this repository on GitHub.
+        if: steps.plan.outputs.build == 'true'
         run: >
           docker build
-          --build-arg VERSION=${{ steps.meta.outputs.version }}
+          --build-arg VERSION=${{ steps.plan.outputs.version }}
           --label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          --tag ${{ steps.meta.outputs.image }}:latest
-          --tag ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
+          --tag ${{ steps.plan.outputs.image }}:latest
+          --tag ${{ steps.plan.outputs.image }}:sha-${{ steps.plan.outputs.short_sha }}
           .
 
-      - name: Is this version already released?
-        id: release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "v${{ steps.meta.outputs.version }}" >/dev/null 2>&1; then
-            echo "new=false" >> "$GITHUB_OUTPUT"
-            echo "v${{ steps.meta.outputs.version }} is already released; publishing latest only."
-          else
-            echo "new=true" >> "$GITHUB_OUTPUT"
-            echo "v${{ steps.meta.outputs.version }} is new; it will be released."
-          fi
-
       - name: Push the image
-        if: steps.release.outcome == 'success'
+        if: steps.plan.outputs.build == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
-          image="${{ steps.meta.outputs.image }}"
+          image="${{ steps.plan.outputs.image }}"
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
           docker push "$image:latest"
-          docker push "$image:sha-${{ steps.meta.outputs.short_sha }}"
+          docker push "$image:sha-${{ steps.plan.outputs.short_sha }}"
 
           # The version tag is pushed once, with the release, so it never
           # changes after people start using it.
-          if [ "${{ steps.release.outputs.new }}" = "true" ]; then
-            docker tag "$image:latest" "$image:${{ steps.meta.outputs.version }}"
-            docker push "$image:${{ steps.meta.outputs.version }}"
+          if [ "${{ steps.plan.outputs.new }}" = "true" ]; then
+            docker tag "$image:latest" "$image:${{ steps.plan.outputs.version }}"
+            docker push "$image:${{ steps.plan.outputs.version }}"
           fi
 
           docker logout ghcr.io
 
       - name: Create the release
-        if: steps.release.outputs.new == 'true'
+        if: steps.plan.outputs.new == 'true' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${{ steps.meta.outputs.version }}"
+          version="${{ steps.plan.outputs.version }}"
           gh release create "v$version" \
             --target "$GITHUB_SHA" \
             --title "v$version" \
-            --notes "Image: \`${{ steps.meta.outputs.image }}:$version\`
+            --notes "Image: \`${{ steps.plan.outputs.image }}:$version\`
 
           See docs/setup.md for how to run it."
