@@ -15,12 +15,11 @@
 
 name: Build image
 
+# No paths filter on purpose: a mirror push that creates main on GitHub has
+# no diff to filter, and with paths-ignore GitHub would skip it (no release).
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
   pull_request:
   workflow_dispatch:
 
