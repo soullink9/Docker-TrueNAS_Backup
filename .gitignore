@@ -1,0 +1,5 @@
+# Secrets never go in the repo.
+.env
+
+__pycache__/
+*.pyc

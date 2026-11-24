@@ -1,0 +1,18 @@
+# TrueNAS backup, run on the PRIMARY TrueNAS.
+# On TrueNAS SCALE: Apps > Discover Apps > Custom App > Install via YAML, or
+# any compose project. Settings: docs/setup.md
+
+services:
+  truenas-backup:
+    image: <your-gitea-host>/<owner>/docker-truenas_backup:latest
+    container_name: truenas-backup
+    restart: unless-stopped
+    # Host networking: Wake-on-LAN broadcasts must reach the LAN, and the
+    # container reaches the primary's own API at 127.0.0.1.
+    network_mode: host
+    # Secrets: see .env.example. Use an absolute path on a pool dataset when
+    # installing through the TrueNAS Apps screen.
+    env_file: /mnt/tank/apps/truenas-backup/.env
+    environment:
+      TZ: America/New_York            # BACKUP_SCHEDULE uses this time zone
+      BACKUP_SCHEDULE: "0 1 * * mon"  # Mondays at 1:00 AM (cron syntax)

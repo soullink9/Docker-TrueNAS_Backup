@@ -1,0 +1,85 @@
+# Home Assistant side of the weekly TrueNAS backup (docs/home-assistant.md).
+#
+# 1. Helper: Settings > Devices & services > Helpers > Create helper > Date and/or time,
+#    "Date and time", named "TrueNAS backup last success"
+#    (entity id input_datetime.truenas_backup_last_success).
+#    Or paste this block into configuration.yaml instead and restart:
+#
+# input_datetime:
+#   truenas_backup_last_success:
+#     name: TrueNAS backup last success
+#     has_date: true
+#     has_time: true
+#
+# 2. Automations: Settings > Automations & scenes > Create automation > Edit in YAML,
+#    paste ONE automation below per new automation, and save.
+#
+# Replace in both:
+#   truenas-backup-CHANGE-ME      -> a long random webhook id (it acts as the password)
+#   notify.mobile_app_YOUR_PHONE  -> your phone's notify action (Developer tools > Actions, search "mobile_app")
+#
+# The webhook URL for HA_WEBHOOK_URL in .env is then:
+#   http://<home-assistant-ip>:8123/api/webhook/truenas-backup-CHANGE-ME
+
+# ---------------------------------------------------------------------------
+# Automation 1: receive results from the primary TrueNAS
+# ---------------------------------------------------------------------------
+alias: TrueNAS weekly backup - result
+description: Records successful runs and pushes failures and warnings to the phone.
+mode: queued
+triggers:
+  - trigger: webhook
+    webhook_id: truenas-backup-CHANGE-ME
+    allowed_methods:
+      - POST
+    local_only: true
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.json.status == 'success' }}"
+        sequence:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.truenas_backup_last_success
+            data:
+              timestamp: "{{ now().timestamp() }}"
+    default:
+      - action: notify.mobile_app_YOUR_PHONE
+        data:
+          title: "{{ trigger.json.title }}"
+          message: "{{ trigger.json.message }}"
+          data:
+            push:
+              interruption-level: time-sensitive   # iOS; ignored on Android
+            priority: high                          # Android; ignored on iOS
+            ttl: 0
+
+# ---------------------------------------------------------------------------
+# Automation 2 (separate automation): warn if Monday's run never reported success
+# Catches the cases the script cannot report itself: primary down, cron job
+# disabled, script crashed. Move the time and weekday if you move the backup.
+# ---------------------------------------------------------------------------
+# alias: TrueNAS weekly backup - missed run
+# description: Alerts if no successful backup was recorded in the last 12 hours on Monday morning.
+# mode: single
+# triggers:
+#   - trigger: time
+#     at: "08:00:00"
+# conditions:
+#   - condition: time
+#     weekday:
+#       - mon
+#   - condition: template
+#     value_template: >
+#       {{ now().timestamp()
+#          - as_timestamp(states('input_datetime.truenas_backup_last_success'), 0)
+#          > 12 * 3600 }}
+# actions:
+#   - action: notify.mobile_app_YOUR_PHONE
+#     data:
+#       title: TrueNAS backup did not complete
+#       message: >
+#         No successful backup was recorded this morning. Last success:
+#         {{ states('input_datetime.truenas_backup_last_success') }}.
+#         Check the log on the primary TrueNAS.

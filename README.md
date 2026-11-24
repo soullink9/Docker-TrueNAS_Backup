@@ -1,0 +1,29 @@
+<p align="center"><img src="docs/assets/icon.png" alt="Docker-TrueNAS_Backup icon" width="128"></p>
+
+# Docker-TrueNAS_Backup
+
+## Disclosure
+
+This is a personal project, built with the help of AI (Claude) and reviewed and tested by me. It is not affiliated with or endorsed by iXsystems or the TrueNAS project. It powers a server on and off and starts ZFS replications, so read the docs and test it with `--no-shutdown` first. It comes with no warranty: use it at your own risk.
+
+## What it is
+
+One small container that runs on the **primary** TrueNAS and looks after a **backup** TrueNAS that is normally switched off. On a schedule (Mondays at 1:00 AM by default) it:
+
+1. powers the backup box on through its BMC (IPMI), with Wake-on-LAN as a fallback,
+2. waits for it to boot,
+3. runs your existing replication task(s) through the primary's TrueNAS API and checks they finished,
+4. shuts the backup box down cleanly (IPMI soft power-off) and checks it is off,
+5. tells Home Assistant how it went. Failures go to your phone; a second automation warns you if a Monday run never reports back.
+
+```yaml
+environment:
+  TZ: America/New_York
+  BACKUP_SCHEDULE: "0 1 * * mon"   # cron syntax
+```
+
+## Learn more
+
+- [Setup](docs/setup.md): preparing both boxes, the API key, compose, every setting, running it by hand
+- [Home Assistant](docs/home-assistant.md): the webhook, phone alerts and the missed-run check
+- [Development](docs/development.md): building, tests, versions and releases

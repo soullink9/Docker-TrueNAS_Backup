@@ -1,0 +1,253 @@
+# Builds the image, runs the tests inside it, and publishes it to this Gitea
+# instance's container registry.
+#
+#   every push to main     -> <image>:latest and <image>:sha-<commit>
+#   new version in VERSION -> also <image>:<version> and a vX.Y.Z release
+#   pull request           -> build and test only, nothing published
+#
+# Needs (see docs/development.md):
+#   runner   /var/run/docker.sock listed under container.valid_volumes in the
+#            runner's config.yaml (the job mounts dind's socket, see below)
+#   secret   REGISTRY_TOKEN       Gitea access token: write:package, write:repository
+#   variable REGISTRY_HOST        registry name the daemon pushes to (optional;
+#                                 default: the host of the server URL)
+#   variable GITEA_INTERNAL_URL   how the runner reaches Gitea's API (optional;
+#                                 defaults to the server URL)
+#   variable DOCKER_HOST          the runner's Docker daemon (optional; found
+#                                 automatically, see "Find the Docker daemon")
+#
+# Gitea serves the same images under every name that reaches it, so pushing to
+# the internal name (e.g. gitea-server:3000) and pulling from another
+# (e.g. gitea.example.com) is fine.
+
+name: Build image
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # The job image (node:22-bookworm) has no Docker CLI, so Docker's official
+  # static client and its buildx plugin (BuildKit builds) are fetched. Only
+  # the client side: the daemon is the runner's (docker:dind).
+  DOCKER_CLI_VERSION: "27.5.1"
+  BUILDX_VERSION: "0.19.3"
+
+# With a job-level container: the runner's default shell is plain sh, but the
+# steps use bash (arrays, ${VAR:0:7}). node:22-bookworm has bash.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Same image as the runner's ubuntu-latest label, plus dind's Docker socket
+    # so the job can build and push. Jobs are created inside dind, so this is
+    # dind's socket, not the TrueNAS host's. The runner allows the mount
+    # through container.valid_volumes.
+    container:
+      image: node:22-bookworm
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install the Docker CLI
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            # download.docker.com names its folders after uname -m (x86_64, aarch64).
+            url="https://download.docker.com/linux/static/stable/$(uname -m)/docker-${DOCKER_CLI_VERSION}.tgz"
+            echo "Downloading $url"
+            curl -fsSL "$url" | tar -xz -C /tmp docker/docker
+            install -m 0755 /tmp/docker/docker /usr/local/bin/docker
+          fi
+          docker --version
+
+          if ! docker buildx version >/dev/null 2>&1; then
+            # buildx release files use Go's names for the architecture.
+            case "$(uname -m)" in
+              x86_64)  arch=amd64 ;;
+              aarch64) arch=arm64 ;;
+              *)       arch="$(uname -m)" ;;
+            esac
+            url="https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${arch}"
+            echo "Downloading $url"
+            mkdir -p "$HOME/.docker/cli-plugins"
+            curl -fsSL "$url" -o "$HOME/.docker/cli-plugins/docker-buildx"
+            chmod 0755 "$HOME/.docker/cli-plugins/docker-buildx"
+          fi
+          docker buildx version
+
+      - name: Find the Docker daemon
+        env:
+          CONFIGURED: ${{ vars.DOCKER_HOST }}
+          CERT_PATH: ${{ vars.DOCKER_CERT_PATH || '/certs/client' }}
+        run: |
+          # Try what is configured first, then the usual places, and keep the
+          # first daemon that answers. Normally that is the socket mounted
+          # by the job's container: section above.
+          candidates=()
+          [ -n "$CONFIGURED" ] && candidates+=("$CONFIGURED")
+          [ -n "${DOCKER_HOST:-}" ] && candidates+=("$DOCKER_HOST")
+          candidates+=(
+            unix:///var/run/docker.sock
+            tcp://localhost:2375
+            tcp://docker:2375
+            tcp://dind:2375
+          )
+
+          for host in "${candidates[@]}"; do
+            # Port 2376 is dind's TLS port: it needs the client certificates
+            # (ca.pem, cert.pem, key.pem), mounted at CERT_PATH.
+            tls=()
+            case "$host" in
+              tcp://*:2376)
+                if [ ! -f "$CERT_PATH/cert.pem" ]; then
+                  echo "Skipping $host: TLS port, but no client certificates in $CERT_PATH"
+                  continue
+                fi
+                tls=(DOCKER_TLS_VERIFY=1 "DOCKER_CERT_PATH=$CERT_PATH") ;;
+            esac
+
+            if error="$(env "${tls[@]}" DOCKER_HOST="$host" timeout 10 docker version 2>&1 >/dev/null)"; then
+              echo "DOCKER_HOST=$host" >> "$GITHUB_ENV"
+              for setting in "${tls[@]}"; do echo "$setting" >> "$GITHUB_ENV"; done
+              echo "Using the Docker daemon at $host"
+              exit 0
+            fi
+            echo "No Docker daemon at $host: $(echo "$error" | tail -n 1)"
+          done
+
+          echo "::error::No Docker daemon reachable from the job container. Check that /var/run/docker.sock is listed under container.valid_volumes in the runner's config.yaml (see docs/development.md), or mount the dind client certificates and set DOCKER_HOST to tcp://docker:2376."
+          exit 1
+
+      - name: Work out the version and image name
+        id: meta
+        env:
+          SERVER_URL: ${{ gitea.server_url }}
+          REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+          INTERNAL_URL: ${{ vars.GITEA_INTERNAL_URL }}
+          REPOSITORY: ${{ gitea.repository }}
+          SHA: ${{ gitea.sha }}
+        run: |
+          # VERSION is the only place the version is written down.
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION must look like 1.2.3, found '$version'" >&2
+            exit 1
+          fi
+
+          # Registry host: the server URL without scheme and path, unless set.
+          # A plain-http name (e.g. gitea-server:3000) must be in the dind
+          # daemon's --insecure-registry list.
+          registry="${REGISTRY_HOST:-${SERVER_URL#*://}}"
+          registry="${registry#*://}"
+          registry="${registry%%/*}"
+
+          # Image names must be lowercase.
+          image="${registry}/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+
+          api="${INTERNAL_URL:-$SERVER_URL}"
+
+          {
+            echo "version=$version"
+            echo "registry=$registry"
+            echo "image=$image"
+            echo "short_sha=${SHA:0:7}"
+            echo "api=${api%/}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Version $version, image $image"
+
+      - name: Run the tests
+        # The Dockerfile's test stage runs the unit tests in the real image.
+        run: docker build --target test .
+
+      - name: Build the image
+        run: >
+          docker build
+          --build-arg VERSION=${{ steps.meta.outputs.version }}
+          --tag ${{ steps.meta.outputs.image }}:latest
+          --tag ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
+          .
+
+      - name: Is this version already released?
+        id: release
+        if: gitea.event_name != 'pull_request' && gitea.ref == 'refs/heads/main'
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::The REGISTRY_TOKEN secret is not set (Gitea access token with write:package and write:repository)."
+            exit 1
+          fi
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: token $TOKEN" \
+            "${{ steps.meta.outputs.api }}/api/v1/repos/${{ gitea.repository }}/releases/tags/v${{ steps.meta.outputs.version }}")"
+
+          case "$code" in
+            200) echo "new=false" >> "$GITHUB_OUTPUT"
+                 echo "v${{ steps.meta.outputs.version }} is already released; publishing latest only." ;;
+            404) echo "new=true" >> "$GITHUB_OUTPUT"
+                 echo "v${{ steps.meta.outputs.version }} is new; it will be released." ;;
+            *)   echo "::error::Gitea API answered HTTP $code; check REGISTRY_TOKEN and GITEA_INTERNAL_URL."
+                 exit 1 ;;
+          esac
+
+      - name: Push the image
+        if: steps.release.outcome == 'success'
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          USER: ${{ gitea.actor }}
+        run: |
+          image="${{ steps.meta.outputs.image }}"
+          echo "$TOKEN" | docker login "${{ steps.meta.outputs.registry }}" -u "$USER" --password-stdin
+
+          docker push "$image:latest"
+          docker push "$image:sha-${{ steps.meta.outputs.short_sha }}"
+
+          # The version tag is pushed once, with the release, so it never
+          # changes after people start using it.
+          if [ "${{ steps.release.outputs.new }}" = "true" ]; then
+            docker tag "$image:latest" "$image:${{ steps.meta.outputs.version }}"
+            docker push "$image:${{ steps.meta.outputs.version }}"
+          fi
+
+          docker logout "${{ steps.meta.outputs.registry }}"
+
+      - name: Create the release
+        if: steps.release.outputs.new == 'true'
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA: ${{ gitea.sha }}
+        run: |
+          # node is always in the job image, so it builds the JSON safely.
+          payload="$(node -e '
+            const { VERSION, IMAGE, SHA } = process.env;
+            console.log(JSON.stringify({
+              tag_name: `v${VERSION}`,
+              target_commitish: SHA,
+              name: `v${VERSION}`,
+              body: `Image: \`${IMAGE}:${VERSION}\`\n\nPull it through whichever name reaches this Gitea (the path after the host stays the same). See docs/setup.md for how to run it.`,
+            }));
+          ')"
+
+          curl -sf -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "${{ steps.meta.outputs.api }}/api/v1/repos/${{ gitea.repository }}/releases" > /dev/null
+
+          echo "Released v$VERSION"

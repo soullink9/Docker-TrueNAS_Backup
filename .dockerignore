@@ -1,0 +1,10 @@
+# Only what the image needs: app/, tests/ (test stage), VERSION, requirements.txt.
+.git
+.gitea
+.env
+docs
+homeassistant
+*.md
+compose*.yaml
+.env.example
+**/__pycache__
