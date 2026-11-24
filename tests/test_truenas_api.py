@@ -86,6 +86,34 @@ class ApiTest(unittest.TestCase):
             api.job(1)
         self.assertIn("Not authorized: detail here", str(ctx.exception))
 
+    def test_shutdown_sends_the_reason(self):
+        api, sockets = client({"auth.login_with_api_key": True, "system.shutdown": 55})
+        api.shutdown("Weekly backup finished")
+        self.assertEqual(sockets[0].sent[1]["method"], "system.shutdown")
+        self.assertEqual(sockets[0].sent[1]["params"], ["Weekly backup finished"])
+
+    def test_shutdown_counts_a_dropped_connection_as_accepted(self):
+        sockets = []
+
+        class Dropping(FakeSocket):
+            def recv(self):
+                if self.sent and self.sent[-1]["method"] == "system.shutdown":
+                    raise ConnectionResetError("closed")
+                return super().recv()
+
+        def connect(url, timeout, sslopt):
+            sock = Dropping({"auth.login_with_api_key": True, "system.shutdown": 1}, notify_first=False)
+            sockets.append(sock)
+            return sock
+
+        TrueNAS("wss://b/api/current", "k", connect=connect).shutdown("x")
+        self.assertEqual(sockets[0].sent[-1]["method"], "system.shutdown")
+
+    def test_shutdown_refused_is_an_error(self):
+        api, _ = client({"auth.login_with_api_key": True, "system.shutdown": RuntimeError("Not authorized")})
+        with self.assertRaises(ApiError):
+            api.shutdown("x")
+
     def test_connect_failure(self):
         def connect(url, timeout, sslopt):
             raise ConnectionRefusedError("refused")

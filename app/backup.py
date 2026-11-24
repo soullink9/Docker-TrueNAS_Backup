@@ -10,14 +10,16 @@ by hand inside the container:
     docker exec truenas-backup backup --test-notify   only send a test alert
 
 Steps:
-  1. If the backup box is off, power it on with IPMI (Wake-on-LAN as the
-     fallback). If it is already on, it is left on at the end, unless
+  1. If the backup box is off, power it on with the methods in
+     POWER_ON_ORDER that are configured (IPMI, Wake-on-LAN). If it is already on, it is left on at the end, unless
      SHUTDOWN_IF_ALREADY_ON is true.
   2. Wait for it to answer on CHECK_PORT (SSH), then SETTLE_SECONDS more.
   3. Run each replication task in REPLICATION_TASKS through the primary's
      TrueNAS API, wait for its job, and check the task's state is FINISHED.
      A failed task is retried REPLICATION_RETRIES times.
-  4. Send an IPMI soft power-off and wait for the box to report off.
+  4. Shut it down with the methods in POWER_OFF_ORDER that are configured
+     (its own TrueNAS API, IPMI soft-off) and wait until it is off: IPMI's
+     power status when available, else until it stops answering.
   5. Send the result to Home Assistant.
 
 Only one cycle runs at a time; a second one started meanwhile exits at once.
@@ -151,7 +153,7 @@ class BackupCycle:
         elif not self.power.power_on():
             raise Aborted(
                 f"Could not power on {self.s.display_name} "
-                "(IPMI and Wake-on-LAN both failed or are not configured)"
+                f"({', '.join(self.s.power_on_methods) or 'no method configured'} failed)"
             )
 
         log.info("Waiting up to %ds for %s:%d.", self.s.boot_timeout, self.s.backup_host, self.s.check_port)
@@ -273,13 +275,17 @@ class BackupCycle:
 
     def shut_down(self) -> bool:
 
-        log.info("Sending IPMI soft power-off (clean shutdown) to %s.", self.s.ipmi_host or self.s.display_name)
+        log.info("Shutting down %s (%s).", self.s.display_name, ", ".join(self.s.power_off_methods))
 
-        if not self.power.soft_off():
+        if not self.power.shut_down():
+            log.warning("Every shutdown method failed.")
             return False
 
         if self.wait_until(self.power.is_off, self.s.shutdown_timeout, SHUTDOWN_POLL_SECONDS):
-            log.info("%s is powered off.", self.s.display_name)
+            if self.power.confirms_power_state:
+                log.info("%s is powered off.", self.s.display_name)
+            else:
+                log.info("%s stopped answering (no IPMI to confirm the power state).", self.s.display_name)
             return True
 
         return False
@@ -335,10 +341,10 @@ class BackupCycle:
                               f"Replication succeeded in {self.elapsed()}. The backup box was already on, so it was left on.")
         elif self.shut_down():
             outcome = Outcome("success", "TrueNAS backup succeeded",
-                              f"Replication succeeded and the backup box powered off after {self.elapsed()}.")
+                              f"Replication succeeded and the backup box shut down after {self.elapsed()}.")
         else:
             outcome = Outcome("warning", "TrueNAS backup: box still on",
-                              f"Replication succeeded, but {self.s.display_name} did not power off "
+                              f"Replication succeeded, but {self.s.display_name} did not shut down "
                               f"within {self.s.shutdown_timeout // 60} minutes. Check it.")
 
         return self.finish(outcome)

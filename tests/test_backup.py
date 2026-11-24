@@ -46,20 +46,23 @@ class FakePower:
     def is_on(self):
         return self.on
 
+    confirms_power_state = True
+
     def power_on(self):
         self.calls.append("on")
         if self.power_on_works:
             self.on = self.boots
-        return self.power_on_works
+            return "ipmi"
+        return None
 
     def host_up(self):
         return self.on
 
-    def soft_off(self):
-        self.calls.append("soft_off")
+    def shut_down(self):
+        self.calls.append("shut_down")
         if self.powers_off:
             self.on = False
-        return True
+        return "api"
 
     def is_off(self):
         return not self.on
@@ -121,10 +124,10 @@ class CycleTest(unittest.TestCase):
         cycle = make()
         outcome = cycle.run()
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(cycle.power.calls, ["on", "soft_off"])
+        self.assertEqual(cycle.power.calls, ["on", "shut_down"])
         self.assertEqual(cycle.api.runs, [7])
         self.assertEqual(cycle.notifier.sent[0][0], "success")
-        self.assertIn("powered off", outcome.message)
+        self.assertIn("shut down", outcome.message)
 
     def test_already_on_is_left_on(self):
         cycle = make(power=FakePower(on=True))
@@ -136,7 +139,7 @@ class CycleTest(unittest.TestCase):
     def test_already_on_powered_off_when_asked(self):
         cycle = make(power=FakePower(on=True), SHUTDOWN_IF_ALREADY_ON="true")
         cycle.run()
-        self.assertEqual(cycle.power.calls, ["soft_off"])
+        self.assertEqual(cycle.power.calls, ["shut_down"])
 
     def test_no_shutdown(self):
         cycle = make()
@@ -164,7 +167,7 @@ class CycleTest(unittest.TestCase):
         cycle = make(api=FakeApi(job_states=["FAILED", "FAILED"]), SHUTDOWN_ON_FAILURE="yes")
         outcome = cycle.run()
         self.assertEqual(outcome.status, "failure")
-        self.assertIn("soft_off", cycle.power.calls)
+        self.assertIn("shut_down", cycle.power.calls)
         self.assertIn("was powered off", outcome.message)
 
     def test_missing_task_is_not_retried(self):
@@ -180,7 +183,7 @@ class CycleTest(unittest.TestCase):
         cycle = make(api=api, REPLICATION_TIMEOUT="3600", SHUTDOWN_ON_FAILURE="yes")
         outcome = cycle.run()
         self.assertEqual(outcome.status, "failure")
-        self.assertNotIn("soft_off", cycle.power.calls)
+        self.assertNotIn("shut_down", cycle.power.calls)
         self.assertIn("still running after 1h", outcome.message)
         self.assertEqual(len(api.runs), 1)
 
@@ -204,7 +207,7 @@ class CycleTest(unittest.TestCase):
         cycle = make(power=FakePower(power_on_works=False))
         outcome = cycle.run()
         self.assertEqual(outcome.status, "failure")
-        self.assertIn("Could not power on backup box", outcome.message)
+        self.assertIn("Could not power on backup box (ipmi failed)", outcome.message)
         self.assertEqual(cycle.api.runs, [])
 
     def test_box_that_never_boots(self):

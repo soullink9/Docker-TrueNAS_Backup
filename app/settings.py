@@ -18,6 +18,11 @@ import cronspec
 
 DEFAULT_SCHEDULE = "0 1 * * mon"
 
+# Power methods, tried in this order unless POWER_ON_ORDER / POWER_OFF_ORDER
+# say otherwise. Methods that aren't configured are skipped.
+POWER_ON_METHODS = ("ipmi", "wol")
+POWER_OFF_METHODS = ("api", "ipmi")
+
 MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([:-]?[0-9A-Fa-f]{2}){5}$")
 
 TRUE_WORDS = {"1", "true", "yes", "on"}
@@ -43,6 +48,13 @@ class Settings:
     ipmi_interface: str = "lanplus"
     wol_mac: str = ""
     wol_broadcast: str = "255.255.255.255"
+    power_on_order: list[str] = field(default_factory=lambda: list(POWER_ON_METHODS))
+    power_off_order: list[str] = field(default_factory=lambda: list(POWER_OFF_METHODS))
+
+    # The backup box's own TrueNAS API (shuts it down cleanly)
+    backup_truenas_url: str = ""
+    backup_truenas_api_key: str = ""
+    backup_truenas_verify_tls: bool = False
 
     # The primary's TrueNAS API (runs the replication)
     truenas_url: str = ""
@@ -71,6 +83,31 @@ class Settings:
     @property
     def has_ipmi(self) -> bool:
         return bool(self.ipmi_host and self.ipmi_user)
+
+    @property
+    def has_wol(self) -> bool:
+        return bool(self.wol_mac)
+
+    @property
+    def has_backup_api(self) -> bool:
+        return bool(self.backup_truenas_url and self.backup_truenas_api_key)
+
+    def configured(self, method: str) -> bool:
+        return {
+            "ipmi": self.has_ipmi,
+            "wol": self.has_wol,
+            "api": self.has_backup_api,
+        }.get(method, False)
+
+    @property
+    def power_on_methods(self) -> list[str]:
+        """The configured power-on methods, in the order they are tried."""
+        return [m for m in self.power_on_order if self.configured(m)]
+
+    @property
+    def power_off_methods(self) -> list[str]:
+        """The configured shutdown methods, in the order they are tried."""
+        return [m for m in self.power_off_order if self.configured(m)]
 
     @property
     def display_name(self) -> str:
@@ -133,6 +170,29 @@ def parse_tasks(raw: str) -> list[str]:
     return names
 
 
+def parse_order(env: Mapping[str, str], name: str, allowed: tuple[str, ...], problems: list[str]) -> list[str]:
+    """POWER_ON_ORDER / POWER_OFF_ORDER: method names, comma-separated."""
+
+    raw = env.get(name)
+
+    if raw is None or raw.strip() == "":
+        return list(allowed)
+
+    order: list[str] = []
+
+    for part in raw.split(","):
+        method = part.strip().lower()
+        if not method:
+            continue
+        if method not in allowed:
+            problems.append(f"{name}: '{method}' is not one of {', '.join(allowed)}")
+            continue
+        if method not in order:
+            order.append(method)
+
+    return order or list(allowed)
+
+
 def load(env: Mapping[str, str] | None = None) -> tuple[Settings, list[str]]:
     """Settings from the environment, and a list of problems ([] = usable)."""
 
@@ -151,6 +211,11 @@ def load(env: Mapping[str, str] | None = None) -> tuple[Settings, list[str]]:
         ipmi_interface=_str(env, "IPMI_INTERFACE", "lanplus"),
         wol_mac=_str(env, "WOL_MAC"),
         wol_broadcast=_str(env, "WOL_BROADCAST", "255.255.255.255"),
+        power_on_order=parse_order(env, "POWER_ON_ORDER", POWER_ON_METHODS, problems),
+        power_off_order=parse_order(env, "POWER_OFF_ORDER", POWER_OFF_METHODS, problems),
+        backup_truenas_url=_str(env, "BACKUP_TRUENAS_URL"),
+        backup_truenas_api_key=_str(env, "BACKUP_TRUENAS_API_KEY"),
+        backup_truenas_verify_tls=_bool(env, "BACKUP_TRUENAS_VERIFY_TLS", False, problems),
         truenas_url=_str(env, "TRUENAS_URL"),
         truenas_api_key=_str(env, "TRUENAS_API_KEY"),
         truenas_verify_tls=_bool(env, "TRUENAS_VERIFY_TLS", False, problems),
@@ -175,14 +240,27 @@ def load(env: Mapping[str, str] | None = None) -> tuple[Settings, list[str]]:
     if not s.backup_host:
         problems.append("BACKUP_HOST is not set (the backup box's TrueNAS IP)")
 
-    if not s.has_ipmi and not s.wol_mac:
-        problems.append("set IPMI_HOST and IPMI_USER, or WOL_MAC, so the backup box can be powered on")
+    # IPMI is optional, but once any of it is set, all of it must be.
+    if (s.ipmi_host or s.ipmi_user or s.ipmi_password) and not (s.ipmi_host and s.ipmi_user and s.ipmi_password):
+        problems.append("IPMI needs all of IPMI_HOST, IPMI_USER and IPMI_PASSWORD (or none of them)")
 
-    if s.ipmi_host and not s.ipmi_user:
-        problems.append("IPMI_USER is not set")
+    # The backup box's API is optional too, but needs both parts.
+    if bool(s.backup_truenas_url) != bool(s.backup_truenas_api_key):
+        problems.append("the backup box's API needs both BACKUP_TRUENAS_URL and BACKUP_TRUENAS_API_KEY (or neither)")
+    elif s.backup_truenas_url and not s.backup_truenas_url.startswith(("wss://", "ws://")):
+        problems.append("BACKUP_TRUENAS_URL must start with wss:// (ws:// only for testing)")
 
-    if s.has_ipmi and not s.ipmi_password:
-        problems.append("IPMI_PASSWORD is not set")
+    if not s.power_on_methods:
+        problems.append(
+            "no way to power the backup box on: set WOL_MAC (Wake-on-LAN) and/or "
+            "IPMI_HOST, IPMI_USER and IPMI_PASSWORD, and keep them in POWER_ON_ORDER"
+        )
+
+    if not s.power_off_methods:
+        problems.append(
+            "no way to shut the backup box down: set BACKUP_TRUENAS_URL and BACKUP_TRUENAS_API_KEY "
+            "(its own TrueNAS API) and/or IPMI, and keep them in POWER_OFF_ORDER"
+        )
 
     if s.wol_mac and not MAC_RE.match(s.wol_mac):
         problems.append(f"WOL_MAC '{s.wol_mac}' is not a MAC address")

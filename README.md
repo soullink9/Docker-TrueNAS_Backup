@@ -10,10 +10,10 @@ This is a personal project, built with the help of AI (Claude) and reviewed and 
 
 One small container that runs on the **primary** TrueNAS and looks after a **backup** TrueNAS that is normally switched off. On a schedule (Mondays at 1:00 AM by default) it:
 
-1. powers the backup box on through its BMC (IPMI), with Wake-on-LAN as a fallback,
+1. powers the backup box on with IPMI and/or Wake-on-LAN, whichever you have (in the order you choose),
 2. waits for it to boot,
 3. runs your existing replication task(s) through the primary's TrueNAS API and checks they finished,
-4. shuts the backup box down cleanly (IPMI soft power-off) and checks it is off,
+4. shuts the backup box down cleanly through its own TrueNAS API and/or an IPMI soft power-off, and checks it is off,
 5. tells Home Assistant how it went. Failures go to your phone; a second automation warns you if a Monday run never reports back.
 
 ```yaml

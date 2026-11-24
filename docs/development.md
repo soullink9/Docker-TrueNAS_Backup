@@ -8,7 +8,7 @@ app/
   backup.py                one backup cycle; also `docker exec ... backup` by hand
   settings.py              environment variables, checked at start
   cronspec.py              the cron-syntax schedule parser
-  power.py                 IPMI (ipmitool) and Wake-on-LAN
+  power.py                 power on/off: IPMI, Wake-on-LAN, the backup box's API
   truenas_api.py           TrueNAS JSON-RPC 2.0 WebSocket client
   notify.py                Home Assistant webhook
   healthcheck.py           Docker healthcheck

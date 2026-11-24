@@ -1,10 +1,22 @@
 """
 Powering the backup box on and off, and checking whether it is up.
 
-IPMI (ipmitool, lanplus) is the main way. Wake-on-LAN is the fallback for
-power-on; it needs the container on the host network so its broadcast
-reaches the LAN. Power-off is an IPMI "soft" off: an ACPI power-button press,
-which TrueNAS answers with a clean shutdown.
+Every method is optional; the ones that are configured are tried in order
+until one works.
+
+Power on (POWER_ON_ORDER, default "ipmi,wol"):
+  ipmi  an IPMI "chassis power on" through the BMC (ipmitool, lanplus)
+  wol   a Wake-on-LAN magic packet. Needs the container on the host network
+        so its broadcast reaches the LAN.
+
+Shut down (POWER_OFF_ORDER, default "api,ipmi"):
+  api   the backup box's own TrueNAS API (system.shutdown): a normal,
+        clean TrueNAS shutdown, with the reason in its log
+  ipmi  an IPMI "soft" off: an ACPI power-button press, which TrueNAS also
+        answers with a clean shutdown
+
+Whether the box is off is read from IPMI when it is configured. Without
+IPMI, the box counts as off once it stops answering on CHECK_PORT.
 """
 
 from __future__ import annotations
@@ -15,11 +27,14 @@ import socket
 import subprocess
 
 from settings import Settings
+from truenas_api import ApiError, TrueNAS
 
 
 log = logging.getLogger("power")
 
 IPMI_TIMEOUT = 30
+
+SHUTDOWN_REASON = "Weekly backup finished (Docker-TrueNAS_Backup)"
 
 
 def magic_packet(mac: str) -> bytes:
@@ -35,9 +50,18 @@ def magic_packet(mac: str) -> bytes:
 
 class Power:
 
-    def __init__(self, settings: Settings, run=subprocess.run):
+    def __init__(self, settings: Settings, run=subprocess.run, backup_api=None):
         self.s = settings
         self._run = run
+
+        if backup_api is None and settings.has_backup_api:
+            backup_api = TrueNAS(
+                settings.backup_truenas_url,
+                settings.backup_truenas_api_key,
+                verify_tls=settings.backup_truenas_verify_tls,
+            )
+
+        self.backup_api = backup_api
 
     # ---- IPMI -------------------------------------------------------------
 
@@ -104,6 +128,11 @@ class Power:
 
     # ---- what the backup cycle uses ----------------------------------------
 
+    @property
+    def confirms_power_state(self) -> bool:
+        """True when IPMI can say the box is really powered off."""
+        return self.s.has_ipmi
+
     def is_on(self) -> bool:
         """Whether the backup box is already running (IPMI, else its port)."""
 
@@ -112,39 +141,56 @@ class Power:
 
         return self.host_up()
 
-    def power_on(self) -> bool:
+    def power_on(self) -> str | None:
+        """Tries each power-on method in order; returns the one that worked."""
 
-        if self.s.has_ipmi:
-            ok, output = self.ipmi("chassis", "power", "on")
-            if ok:
-                log.info("IPMI power-on sent to %s.", self.s.ipmi_host)
-                return True
-            log.warning("IPMI power-on failed: %s", output or "no output")
+        for method in self.s.power_on_methods:
 
-        if self.s.wol_mac:
-            try:
-                self.send_wol()
-            except (OSError, ValueError) as exc:
-                log.warning("Sending Wake-on-LAN failed: %s", exc)
-            else:
-                log.info("Wake-on-LAN sent to %s via %s.", self.s.wol_mac, self.s.wol_broadcast)
-                return True
+            if method == "ipmi":
+                ok, output = self.ipmi("chassis", "power", "on")
+                if ok:
+                    log.info("IPMI power-on sent to %s.", self.s.ipmi_host)
+                    return method
+                log.warning("IPMI power-on failed: %s", output or "no output")
 
-        return False
+            elif method == "wol":
+                try:
+                    self.send_wol()
+                except (OSError, ValueError) as exc:
+                    log.warning("Sending Wake-on-LAN failed: %s", exc)
+                else:
+                    log.info("Wake-on-LAN sent to %s via %s.", self.s.wol_mac, self.s.wol_broadcast)
+                    return method
 
-    def soft_off(self) -> bool:
-        """Ask for a clean shutdown. True when the request was accepted."""
+        return None
 
-        if not self.s.has_ipmi:
-            log.warning("IPMI is not configured, so the backup box cannot be powered off.")
-            return False
+    def shut_down(self) -> str | None:
+        """Tries each shutdown method in order; returns the one that was accepted."""
 
-        ok, output = self.ipmi("chassis", "power", "soft")
+        for method in self.s.power_off_methods:
 
-        if not ok:
-            log.warning("IPMI soft power-off failed: %s", output or "no output")
+            if method == "api":
+                try:
+                    self.backup_api.shutdown(SHUTDOWN_REASON)
+                except ApiError as exc:
+                    log.warning("Shutdown through the backup box's API failed: %s", exc)
+                else:
+                    log.info("Shutdown requested through the backup box's TrueNAS API.")
+                    return method
 
-        return ok
+            elif method == "ipmi":
+                ok, output = self.ipmi("chassis", "power", "soft")
+                if ok:
+                    log.info("IPMI soft power-off (clean shutdown) sent to %s.", self.s.ipmi_host)
+                    return method
+                log.warning("IPMI soft power-off failed: %s", output or "no output")
+
+        return None
 
     def is_off(self) -> bool:
-        return self.ipmi_state() == "off"
+        """Off by IPMI's power status; without IPMI, no longer answering."""
+
+        if self.s.has_ipmi:
+            return self.ipmi_state() == "off"
+
+        return not self.host_up()

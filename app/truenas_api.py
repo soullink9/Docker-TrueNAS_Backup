@@ -7,6 +7,9 @@ requests and closes it again. A replication can run for hours; short separate
 connections survive a restarted middleware or a network blip far better than
 one connection held open the whole time.
 
+Used twice: the primary's API runs the replication, and the backup box's own
+API (optional) shuts it down.
+
 Use wss:// (TLS). TrueNAS revokes an API key that is sent over plain ws://.
 """
 
@@ -48,7 +51,10 @@ class Connection:
         # skip those until our answer arrives.
         while True:
 
-            raw = self._ws.recv()
+            try:
+                raw = self._ws.recv()
+            except Exception as exc:  # noqa: BLE001  (closed or timed out mid-answer)
+                raise ApiError(f"{method}: connection closed ({exc})") from exc
 
             if not raw:
                 raise ApiError(f"{method}: connection closed")
@@ -171,3 +177,17 @@ class TrueNAS:
             return {}
 
         return rows[0].get("state") or {}
+
+    def shutdown(self, reason: str) -> None:
+        """Shut this TrueNAS down cleanly (system.shutdown, a job).
+
+        The answer is the job id. The box may close the connection as it goes
+        down; that counts as accepted once the request was sent.
+        """
+
+        with self.session() as conn:
+            try:
+                conn.call("system.shutdown", reason)
+            except ApiError as exc:
+                if "connection closed" not in str(exc):
+                    raise

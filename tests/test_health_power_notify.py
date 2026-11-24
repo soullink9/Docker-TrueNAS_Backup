@@ -11,6 +11,7 @@ import healthcheck
 import power
 import settings
 from notify import Notifier
+from truenas_api import ApiError
 
 ENV = {
     "BACKUP_HOST": "192.168.1.20",
@@ -66,6 +67,78 @@ class PowerTest(unittest.TestCase):
         self.assertEqual(packet[6:12], bytes.fromhex("aabbccddeeff"))
         with self.assertRaises(ValueError):
             power.magic_packet("aa:bb")
+
+
+class FakeBackupApi:
+
+    def __init__(self, works=True):
+        self.works = works
+        self.reasons = []
+
+    def shutdown(self, reason):
+        self.reasons.append(reason)
+        if not self.works:
+            raise ApiError("cannot connect")
+
+
+class PowerOrderTest(unittest.TestCase):
+
+    def make(self, ipmi_ok=True, api=None, **extra):
+        env = dict(ENV, WOL_MAC="aa:bb:cc:dd:ee:ff", BACKUP_TRUENAS_URL="wss://b/api/current",
+                   BACKUP_TRUENAS_API_KEY="2-key", **extra)
+        env = {k: v for k, v in env.items() if v is not None}
+        s, problems = settings.load(env)
+        self.assertEqual(problems, [])
+        self.ipmi_calls = []
+
+        def run(cmd, env, **kwargs):
+            self.ipmi_calls.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0 if ipmi_ok else 1, stdout="", stderr="")
+
+        p = power.Power(s, run=run, backup_api=api or FakeBackupApi())
+        self.wol_sent = []
+        p.send_wol = lambda: self.wol_sent.append(1)
+        return p
+
+    def test_power_on_prefers_ipmi_then_falls_back_to_wol(self):
+        self.assertEqual(self.make().power_on(), "ipmi")
+        self.assertEqual(self.wol_sent, [])
+        self.assertEqual(self.make(ipmi_ok=False).power_on(), "wol")
+        self.assertEqual(self.wol_sent, [1])
+
+    def test_power_on_order_can_put_wol_first(self):
+        self.assertEqual(self.make(POWER_ON_ORDER="wol,ipmi").power_on(), "wol")
+        self.assertEqual(self.ipmi_calls, [])
+
+    def test_power_on_without_ipmi(self):
+        p = self.make(IPMI_HOST=None, IPMI_USER=None, IPMI_PASSWORD=None)
+        self.assertEqual(p.power_on(), "wol")
+        self.assertFalse(p.confirms_power_state)
+
+    def test_shutdown_prefers_the_backup_api(self):
+        api = FakeBackupApi()
+        self.assertEqual(self.make(api=api).shut_down(), "api")
+        self.assertEqual(len(api.reasons), 1)
+        self.assertNotIn("soft", self.ipmi_calls)
+
+    def test_shutdown_falls_back_to_ipmi(self):
+        self.assertEqual(self.make(api=FakeBackupApi(works=False)).shut_down(), "ipmi")
+        self.assertIn("soft", self.ipmi_calls)
+
+    def test_shutdown_order_ipmi_first(self):
+        api = FakeBackupApi()
+        self.assertEqual(self.make(api=api, POWER_OFF_ORDER="ipmi,api").shut_down(), "ipmi")
+        self.assertEqual(api.reasons, [])
+
+    def test_everything_fails(self):
+        self.assertIsNone(self.make(ipmi_ok=False, api=FakeBackupApi(works=False)).shut_down())
+
+    def test_off_without_ipmi_means_not_answering(self):
+        p = self.make(IPMI_HOST=None, IPMI_USER=None, IPMI_PASSWORD=None)
+        p.host_up = lambda: False
+        self.assertTrue(p.is_off())
+        p.host_up = lambda: True
+        self.assertFalse(p.is_off())
 
 
 class NotifyTest(unittest.TestCase):

@@ -1,8 +1,27 @@
 # Setup
 
-Everything runs on the **primary** TrueNAS (SCALE 25.04 or later). The backup box only needs a reachable BMC and the replication target it already has.
+Everything runs on the **primary** TrueNAS (SCALE 25.04 or later).
+
+## How the backup box is switched on and off
+
+Every method is optional. Set up the ones your backup box has; the container uses whichever are configured, in the order you choose.
+
+| Step | Methods | Default order | Needs |
+|------|---------|---------------|-------|
+| Power on | `ipmi`, `wol` | `POWER_ON_ORDER=ipmi,wol` | At least one |
+| Shut down | `api`, `ipmi` | `POWER_OFF_ORDER=api,ipmi` | At least one |
+
+- **`ipmi`**: the backup box's BMC. Powers on, and shuts down with a soft power-off (a power-button press, which TrueNAS answers with a clean shutdown). It is also the only method that can confirm the box is really powered off.
+- **`wol`**: Wake-on-LAN. Power-on only.
+- **`api`**: the backup box's **own** TrueNAS API (`system.shutdown`), with a separate API key created on the backup box. Shutdown only, and the cleanest one: it is a normal TrueNAS shutdown with the reason in its log.
+
+If the first method fails, the next one is tried. To leave a configured method out, drop it from the order. Without IPMI, "off" means the box stopped answering on `CHECK_PORT`.
+
+A common setup without IPMI is Wake-on-LAN to power on and the backup box's API to shut down.
 
 ## 1. Prepare the backup box
+
+### IPMI (optional)
 
 1. **Give the BMC a fixed IP.** This is the IPMI address, not the TrueNAS address. Set it in the BMC web UI or the BIOS.
 2. **Add a BMC user for the container**, such as `backupctl`, with **Operator** privilege (it can switch power but not change the BMC). Make sure "IPMI over LAN" is on.
@@ -13,8 +32,17 @@ Everything runs on the **primary** TrueNAS (SCALE 25.04 or later). The backup bo
    ```
 
    It should print `Chassis Power is off` or `on`. If it times out, check the BMC cable and that UDP port 623 is open between the boxes.
-4. **Optional: Wake-on-LAN fallback.** WOL must be on in the BIOS. Linux can switch it off on the card, so on the backup box add System > Advanced Settings > Init/Shutdown Scripts: type Command, When Post Init, `ethtool -s <interface> wol g` (e.g. `eno1`). Note that port's MAC for `WOL_MAC`.
-5. **Scrubs and SMART tests.** The box is only on for a few hours a week, so schedule them for a Monday time when it is on (e.g. 1:15 AM). A scrub cut short by the shutdown carries on at the next boot.
+### Wake-on-LAN (optional)
+
+4. WOL must be on in the BIOS. Linux can switch it off on the card, so on the backup box add System > Advanced Settings > Init/Shutdown Scripts: type Command, When Post Init, `ethtool -s <interface> wol g` (e.g. `eno1`). Note that port's MAC for `WOL_MAC`.
+
+### Backup box API key (optional, for `api` shutdown)
+
+5. In the **backup box's** web UI: user menu (top right) > **API Keys** > **Add**, for the admin user. Copy the key into `BACKUP_TRUENAS_API_KEY` and set `BACKUP_TRUENAS_URL` to `wss://<backup-box-IP>/api/current`. As with the primary, keep it on `wss://`: TrueNAS revokes a key sent over plain `ws://`.
+
+### Either way
+
+6. **Scrubs and SMART tests.** The box is only on for a few hours a week, so schedule them for a Monday time when it is on (e.g. 1:15 AM). A scrub cut short by the shutdown carries on at the next boot.
 
 ## 2. Change the replication task on the primary
 
@@ -26,7 +54,7 @@ The container starts the replication, so the task must stop running on its own s
 4. Give the **periodic snapshot task** that feeds it a lifetime of at least **3 weeks**. If the newest snapshot on the backup box is gone from the primary, replication has to start over.
 5. Note the task's exact **Name** for `REPLICATION_TASKS`.
 
-## 3. Create an API key on the primary
+## 3. Create an API key on the primary (required)
 
 The container uses the primary's own API to start the replication and follow its job.
 
@@ -53,7 +81,7 @@ services:
 ```
 
 - **`network_mode: host`** is needed: Wake-on-LAN broadcasts must reach the LAN, and the API is reached at `127.0.0.1`.
-- **`env_file`**: copy [`.env.example`](../.env.example) to a dataset (e.g. `/mnt/tank/apps/truenas-backup/.env`), fill it in, and make it readable by root only (`chmod 600`). It holds the IPMI password and the API key.
+- **`env_file`**: copy [`.env.example`](../.env.example) to a dataset (e.g. `/mnt/tank/apps/truenas-backup/.env`), fill it in, and make it readable by root only (`chmod 600`). It holds the API keys and the IPMI password.
 - **Pulling from Gitea**: if the package is private, add your Gitea registry with a token that has `read:package` under **Apps > Configuration > Manage Container Images / Docker Registries**, or run `docker login <your-gitea-host>` on the primary.
 
 ## 5. Settings
@@ -66,9 +94,13 @@ services:
 | `BACKUP_HOST` | (required) | The backup box's TrueNAS IP, the one the replication's SSH connection uses. |
 | `BACKUP_NAME` | `BACKUP_HOST` | Friendly name in notifications. |
 | `CHECK_PORT` | `22` | The port that answers once the box has booted. |
-| `IPMI_HOST`, `IPMI_USER`, `IPMI_PASSWORD` | | The BMC's IP and the Operator user. Needed to power off. |
+| `POWER_ON_ORDER` | `ipmi,wol` | Power-on methods to try, in order. Unconfigured ones are skipped. |
+| `POWER_OFF_ORDER` | `api,ipmi` | Shutdown methods to try, in order. Unconfigured ones are skipped. |
+| `IPMI_HOST`, `IPMI_USER`, `IPMI_PASSWORD` | empty | Optional. The BMC's IP and the Operator user; all three or none. |
 | `IPMI_INTERFACE` | `lanplus` | ipmitool interface; `lan` only for very old BMCs. |
-| `WOL_MAC`, `WOL_BROADCAST` | empty, `255.255.255.255` | Optional Wake-on-LAN fallback for power-on. Use your LAN's broadcast, e.g. `192.168.1.255`. |
+| `WOL_MAC`, `WOL_BROADCAST` | empty, `255.255.255.255` | Optional Wake-on-LAN. Use your LAN's broadcast, e.g. `192.168.1.255`. |
+| `BACKUP_TRUENAS_URL`, `BACKUP_TRUENAS_API_KEY` | empty | Optional. The backup box's own API, for `api` shutdown: `wss://<backup-box-IP>/api/current` and a key made on the backup box. Both or neither. |
+| `BACKUP_TRUENAS_VERIFY_TLS` | `false` | `true` only if the backup box has a trusted certificate. |
 | `TRUENAS_URL` | (required) | The primary's API, e.g. `wss://127.0.0.1/api/current`. |
 | `TRUENAS_API_KEY` | (required) | From step 3. |
 | `TRUENAS_VERIFY_TLS` | `false` | `true` only with a trusted certificate. |
@@ -78,7 +110,7 @@ services:
 | `REPLICATION_TIMEOUT` | `43200` | Seconds (12 h) before a task still running counts as failed. It is never stopped, and the box is never powered off under it. |
 | `BOOT_TIMEOUT` | `900` | Seconds to wait for the box to answer after power-on. |
 | `SETTLE_SECONDS` | `120` | Extra wait after it answers, so every TrueNAS service is up. |
-| `SHUTDOWN_TIMEOUT` | `900` | Seconds to wait for the box to report power off. |
+| `SHUTDOWN_TIMEOUT` | `900` | Seconds to wait for the box to be off (IPMI power status, else no longer answering). |
 | `SHUTDOWN_ON_FAILURE` | `false` | `true` powers the box off even after a failed replication. `false` leaves it on so you can look. |
 | `SHUTDOWN_IF_ALREADY_ON` | `false` | `true` powers the box off at the end even if it was already on when the run started (someone may be using it). |
 | `HA_WEBHOOK_URL` | empty | The Home Assistant webhook. See [Home Assistant](home-assistant.md). |
@@ -114,13 +146,13 @@ docker exec truenas-backup python /opt/truenas-backup/healthcheck.py --status
 
 | Alert says | What the container did | Check |
 |------------|------------------------|-------|
-| Could not power on | Stopped; the box stays off | BMC IP, user and password; the `ipmitool` test in step 1 |
+| Could not power on (ipmi, wol failed) | Stopped; the box stays off | The methods it names: BMC IP, user and password (the `ipmitool` test in step 1), or the WOL MAC and broadcast |
 | Did not come up on port 22 | Stopped; the box may be on | The BMC console: a stuck boot, a failed disk, a changed IP. Raise `BOOT_TIMEOUT` if it just boots slowly |
 | Replication failed (FAILED: ...) | Retried, then left the box on | The error, and the task in Data Protection. Missing snapshots and SSH keys are the usual causes |
 | login failed / cannot connect | Left the box on | `TRUENAS_API_KEY` (revoked if it was ever sent over `ws://`) and `TRUENAS_URL` |
 | Still running after 12h | Left the box on and the replication running | Usually a large first sync. Power the box off after it finishes, or raise `REPLICATION_TIMEOUT` |
 | No replication task named ... | Stopped | The name must match exactly |
-| Box still on | Replication worked, but the box didn't power off | Whether TrueNAS ignores the power button; shut it down from its UI |
+| Box still on | Replication worked, but the box didn't shut down | The log says which methods were tried. Check `BACKUP_TRUENAS_API_KEY` (and that it was never sent over `ws://`), or whether TrueNAS ignores the power button. Shut it down from its UI |
 | Missed run (from Home Assistant) | Nothing reached Home Assistant | Whether the primary and the container were up, and `docker logs truenas-backup` |
 
 ## Updating
