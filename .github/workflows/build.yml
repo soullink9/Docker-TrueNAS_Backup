@@ -57,6 +57,8 @@ jobs:
             echo "VERSION must look like 1.2.3, found '$version'" >&2
             exit 1
           fi
+          # Every version needs a CHANGELOG.md entry; it becomes the release notes.
+          scripts/release-notes.sh "$version" > /dev/null
 
           new=false
           build=true
@@ -122,9 +124,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.plan.outputs.version }}"
+
+          # The release notes are this version's CHANGELOG.md section.
+          notes="$(scripts/release-notes.sh "$version")"
+
           gh release create "v$version" \
             --target "$GITHUB_SHA" \
             --title "v$version" \
-            --notes "Image: \`${{ steps.plan.outputs.image }}:$version\`
+            --notes "$notes
+
+          Image: \`${{ steps.plan.outputs.image }}:$version\`
 
           See docs/setup.md for how to run it."

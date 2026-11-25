@@ -145,6 +145,8 @@ jobs:
             echo "VERSION must look like 1.2.3, found '$version'" >&2
             exit 1
           fi
+          # Every version needs a CHANGELOG.md entry; it becomes the release notes.
+          scripts/release-notes.sh "$version" > /dev/null
 
           # Registry host: the server URL without scheme and path, unless set.
           # A plain-http name (e.g. gitea-server:3000) must be in the dind
@@ -233,14 +235,17 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.image }}
           SHA: ${{ gitea.sha }}
         run: |
+          # The release notes are this version's CHANGELOG.md section.
+          export NOTES="$(scripts/release-notes.sh "$VERSION")"
+
           # node is always in the job image, so it builds the JSON safely.
           payload="$(node -e '
-            const { VERSION, IMAGE, SHA } = process.env;
+            const { VERSION, IMAGE, SHA, NOTES } = process.env;
             console.log(JSON.stringify({
               tag_name: `v${VERSION}`,
               target_commitish: SHA,
               name: `v${VERSION}`,
-              body: `Image: \`${IMAGE}:${VERSION}\`\n\nPull it through whichever name reaches this Gitea (the path after the host stays the same). See docs/setup.md for how to run it.`,
+              body: `${NOTES}\n\nImage: \`${IMAGE}:${VERSION}\`\n\nPull it through whichever name reaches this Gitea (the path after the host stays the same). See docs/setup.md for how to run it.`,
             }));
           ')"
 

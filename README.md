@@ -33,3 +33,4 @@ Imports the alert blueprint from GitHub into Home Assistant 2026.11 or later. To
 - [Setup](docs/setup.md): preparing both boxes, the API key, compose, every setting, running it by hand
 - [Home Assistant](docs/home-assistant.md): the blueprint, phone alerts and the missed-run check
 - [Development](docs/development.md): building, tests, versions and releases
+- [Changelog](CHANGELOG.md): what changed in each release

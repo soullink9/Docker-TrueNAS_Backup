@@ -15,10 +15,12 @@ app/
 homeassistant/             the Home Assistant blueprint (imported by URL)
 tests/                     unit tests (standard library unittest, no TrueNAS needed)
 docs/assets/icon.svg       repo icon (source); icon.png is the 512 px render
+scripts/release-notes.sh   a version's CHANGELOG.md section (release notes)
 .gitea/workflows/build.yml build, test, publish, release on Gitea
 .github/workflows/build.yml the same on GitHub (ghcr.io), for a push mirror
 Dockerfile
 VERSION                    the version, and the only place it is written
+CHANGELOG.md               what changed in each release
 ```
 
 The only Python dependency is `websocket-client` (see `requirements.txt`); `ipmitool` comes from Alpine's packages. Everything else is the Python standard library.
@@ -45,7 +47,7 @@ On every push to `main`, the workflow on Gitea:
 2. builds the image and pushes `:latest` and `:sha-<commit>`,
 3. if `vX.Y.Z` (from `VERSION`) has no release yet, also pushes `:X.Y.Z` and creates the release.
 
-So to release, bump `VERSION` in the same commit as the change. If that change touches the Home Assistant blueprint, also set the version in its `name:` (and the first line of its description) to the new `VERSION`, so users can see there is an update to import. Leave it alone otherwise. A version tag is pushed only once and never changes afterwards.
+So to release, bump `VERSION` and add its section to [`CHANGELOG.md`](../CHANGELOG.md) in the same commit as the change. The build fails if `VERSION` has no changelog section, and that section becomes the release notes (`scripts/release-notes.sh` extracts it). If that change touches the Home Assistant blueprint, also set the version in its `name:` (and the first line of its description) to the new `VERSION`, so users can see there is an update to import. Leave it alone otherwise. A version tag is pushed only once and never changes afterwards.
 
 Pull requests are built and tested but nothing is published.
 
