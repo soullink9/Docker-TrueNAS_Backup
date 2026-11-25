@@ -2,17 +2,22 @@
 # Builds the image, runs the tests inside it, and publishes it to the GitHub
 # Container Registry (ghcr.io), the default image in compose.example.yaml.
 #
-#   VERSION not yet released on GitHub -> build, push :latest, :sha-<commit>
-#                                         and :<version>, create vX.Y.Z release
-#   already released, code changed     -> build, push :latest and :sha-<commit>
-#   already released, only docs/*.md   -> nothing to do
-#   pull request                       -> build and test only, nothing published
+#   image files changed                -> build, push :latest and :sha-<commit>
+#   VERSION not yet released on GitHub -> also :<version> and a vX.Y.Z release
+#                                         (without image changes, the existing
+#                                         :latest is tagged :<version>, no build)
+#   only docs, blueprint etc. changed  -> nothing to build
+#   pull request, manual run           -> build and test (a PR publishes nothing)
+#
+# "Image files" are the ones scripts/image-changed.sh lists (app/, tests/,
+# Dockerfile, ...).
 #
 # Catch-up: a mirror push can carry several commits at once, and only the
-# newest one runs. Deciding by "is VERSION released here yet?" instead of by
-# the files in the last commit means a release is never missed, even when
-# that newest commit only touches docs. Versions skipped over in between are
-# not built: the current one supersedes them.
+# newest one runs. Both questions are answered over the whole push: which
+# files changed since the previous head, and is VERSION released here yet.
+# So a release is never missed, even when the newest commit only touches
+# docs. Versions skipped over in between are not released: the current one
+# supersedes them.
 #
 # Needs nothing to be set up: GITHUB_TOKEN can push packages and create
 # releases with the permissions below. The first push creates the package as
@@ -60,20 +65,19 @@ jobs:
           # Every version needs a CHANGELOG.md entry; it becomes the release notes.
           scripts/release-notes.sh "$version" > /dev/null
 
-          new=false
+          # Pushes build only when files that go into the image changed.
+          # Pull requests and manual runs always build.
           build=true
+          if [ "$EVENT" = "push" ] && ! scripts/image-changed.sh "$BEFORE" "$GITHUB_SHA"; then
+            build=false
+          fi
 
-          if [ "$EVENT" != "pull_request" ]; then
-            if ! gh release view "v$version" >/dev/null 2>&1; then
-              new=true
-              echo "v$version is not released on GitHub yet: building and releasing it."
-            elif [ "$EVENT" = "push" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null \
-                 && ! git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -Eqv '^docs/|\.md$'; then
-              build=false
-              echo "v$version is released and this push only changed docs: nothing to build."
-            else
-              echo "v$version is released: building :latest from this push."
-            fi
+          # A version not released here yet is released now, whichever
+          # commit introduced it.
+          new=false
+          if [ "$EVENT" != "pull_request" ] && ! gh release view "v$version" >/dev/null 2>&1; then
+            new=true
+            echo "v$version is not released on GitHub yet: releasing it."
           fi
 
           {
@@ -101,13 +105,18 @@ jobs:
           .
 
       - name: Push the image
-        if: steps.plan.outputs.build == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: (steps.plan.outputs.build == 'true' || steps.plan.outputs.new == 'true') && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           image="${{ steps.plan.outputs.image }}"
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-          docker push "$image:latest"
-          docker push "$image:sha-${{ steps.plan.outputs.short_sha }}"
+          if [ "${{ steps.plan.outputs.build }}" = "true" ]; then
+            docker push "$image:latest"
+            docker push "$image:sha-${{ steps.plan.outputs.short_sha }}"
+          else
+            # New version, same image: give the published :latest its version.
+            docker pull "$image:latest"
+          fi
 
           # The version tag is pushed once, with the release, so it never
           # changes after people start using it.

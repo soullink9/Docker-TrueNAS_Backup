@@ -16,6 +16,7 @@ homeassistant/             the Home Assistant blueprint (imported by URL)
 tests/                     unit tests (standard library unittest, no TrueNAS needed)
 docs/assets/icon.svg       repo icon (source); icon.png is the 512 px render
 scripts/release-notes.sh   a version's CHANGELOG.md section (release notes)
+scripts/image-changed.sh   did a push change anything the image is built from?
 .gitea/workflows/build.yml build, test, publish, release on Gitea
 .github/workflows/build.yml the same on GitHub (ghcr.io), for a push mirror
 Dockerfile
@@ -43,9 +44,10 @@ The version lives only in `VERSION` (`MAJOR.MINOR.PATCH`). The workflow passes i
 
 On every push to `main`, the workflow on Gitea:
 
-1. runs the tests,
-2. builds the image and pushes `:latest` and `:sha-<commit>`,
-3. if `vX.Y.Z` (from `VERSION`) has no release yet, also pushes `:X.Y.Z` and creates the release.
+1. if the push changed files the image is built from (`app/`, `tests/`, `Dockerfile`, `requirements.txt`, `.dockerignore`; the list is in `scripts/image-changed.sh`), runs the tests, builds the image and pushes `:latest` and `:sha-<commit>`,
+2. if `vX.Y.Z` (from `VERSION`) has no release yet, also pushes `:X.Y.Z` and creates the release.
+
+A push that only changes docs, the blueprint or the examples builds nothing. If it bumps `VERSION`, the release is still created, and the image already published as `:latest` is tagged `:X.Y.Z` instead of being rebuilt. That image still logs the version it was built as, since its code is the same.
 
 So to release, bump `VERSION` and add its section to [`CHANGELOG.md`](../CHANGELOG.md) in the same commit as the change. The build fails if `VERSION` has no changelog section, and that section becomes the release notes (`scripts/release-notes.sh` extracts it). If that change touches the Home Assistant blueprint, also set the version in its `name:` (and the first line of its description) to the new `VERSION`, so users can see there is an update to import. Leave it alone otherwise. A version tag is pushed only once and never changes afterwards.
 
@@ -53,7 +55,7 @@ Pull requests are built and tested but nothing is published.
 
 ## Publishing on GitHub too
 
-If the Gitea repo is push-mirrored to GitHub, `.github/workflows/build.yml` does the same there, with one difference: it decides by whether `VERSION` is released on GitHub yet rather than by the last commit's files, so a mirror push whose newest commit only touches docs still releases a new version. It tests, pushes `ghcr.io/<owner>/docker-truenas_backup` (`:latest`, `:sha-<commit>`, `:X.Y.Z`) and creates the GitHub release for a new `VERSION`. It uses the built-in `GITHUB_TOKEN`, so there is nothing to configure. The first push creates the package as private: make it public once under the package's settings on GitHub, since `compose.example.yaml` pulls from there by default.
+If the Gitea repo is push-mirrored to GitHub, `.github/workflows/build.yml` does the same there. A mirror push can carry several commits, so both checks cover the whole push: what changed since the previous head, and whether `VERSION` is released on GitHub yet. A push whose newest commit only touches docs still releases a new version. It tests, pushes `ghcr.io/<owner>/docker-truenas_backup` (`:latest`, `:sha-<commit>`, `:X.Y.Z`) and creates the GitHub release for a new `VERSION`. It uses the built-in `GITHUB_TOKEN`, so there is nothing to configure. The first push creates the package as private: make it public once under the package's settings on GitHub, since `compose.example.yaml` pulls from there by default.
 
 The two workflows never both run in one place: Gitea ignores `.github/workflows` when `.gitea/workflows` exists, GitHub never reads `.gitea/`, and the GitHub job also checks it is running on github.com.
 

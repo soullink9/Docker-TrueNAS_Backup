@@ -1,9 +1,16 @@
 # Builds the image, runs the tests inside it, and publishes it to this Gitea
 # instance's container registry.
 #
-#   every push to main     -> <image>:latest and <image>:sha-<commit>
-#   new version in VERSION -> also <image>:<version> and a vX.Y.Z release
-#   pull request           -> build and test only, nothing published
+#   push to main, image files changed -> build, push :latest and :sha-<commit>
+#   new version in VERSION             -> also :<version> and a vX.Y.Z release
+#                                         (without image changes, the existing
+#                                         :latest is tagged :<version>, no build)
+#   push of only docs, blueprint etc.  -> nothing to build
+#   pull request, manual run           -> build and test (a PR publishes nothing)
+#
+# "Image files" are the ones scripts/image-changed.sh lists (app/, tests/,
+# Dockerfile, ...). Pushes are not filtered by path, so a version bump that
+# only touches docs or the blueprint still gets its release.
 #
 # Needs (see docs/development.md):
 #   runner   /var/run/docker.sock listed under container.valid_volumes in the
@@ -25,9 +32,6 @@ name: Build image
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
   pull_request:
   workflow_dispatch:
 
@@ -60,8 +64,94 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # the whole history, to see what a push changed
+
+      - name: Did the image change?
+        id: changes
+        env:
+          EVENT: ${{ gitea.event_name }}
+          BEFORE: ${{ gitea.event.before }}
+          SHA: ${{ gitea.sha }}
+        run: |
+          # In a job container the checkout can belong to another user; git
+          # refuses to read such a repository unless it is marked safe.
+          git config --global --add safe.directory "$PWD"
+
+          # Pushes build only when files that go into the image changed.
+          # Pull requests and manual runs always build.
+          if [ "$EVENT" != "push" ] || scripts/image-changed.sh "$BEFORE" "$SHA"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work out the version and image name
+        id: meta
+        env:
+          SERVER_URL: ${{ gitea.server_url }}
+          REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+          INTERNAL_URL: ${{ vars.GITEA_INTERNAL_URL }}
+          REPOSITORY: ${{ gitea.repository }}
+          SHA: ${{ gitea.sha }}
+        run: |
+          # VERSION is the only place the version is written down.
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION must look like 1.2.3, found '$version'" >&2
+            exit 1
+          fi
+          # Every version needs a CHANGELOG.md entry; it becomes the release notes.
+          scripts/release-notes.sh "$version" > /dev/null
+
+          # Registry host: the server URL without scheme and path, unless set.
+          # A plain-http name (e.g. gitea-server:3000) must be in the dind
+          # daemon's --insecure-registry list.
+          registry="${REGISTRY_HOST:-${SERVER_URL#*://}}"
+          registry="${registry#*://}"
+          registry="${registry%%/*}"
+
+          # Image names must be lowercase.
+          image="${registry}/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+
+          api="${INTERNAL_URL:-$SERVER_URL}"
+
+          {
+            echo "version=$version"
+            echo "registry=$registry"
+            echo "image=$image"
+            echo "short_sha=${SHA:0:7}"
+            echo "api=${api%/}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Version $version, image $image"
+
+      - name: Is this version already released?
+        id: release
+        if: gitea.event_name != 'pull_request' && gitea.ref == 'refs/heads/main'
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::The REGISTRY_TOKEN secret is not set (Gitea access token with write:package and write:repository)."
+            exit 1
+          fi
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: token $TOKEN" \
+            "${{ steps.meta.outputs.api }}/api/v1/repos/${{ gitea.repository }}/releases/tags/v${{ steps.meta.outputs.version }}")"
+
+          case "$code" in
+            200) echo "new=false" >> "$GITHUB_OUTPUT"
+                 echo "v${{ steps.meta.outputs.version }} is already released; publishing latest only." ;;
+            404) echo "new=true" >> "$GITHUB_OUTPUT"
+                 echo "v${{ steps.meta.outputs.version }} is new; it will be released." ;;
+            *)   echo "::error::Gitea API answered HTTP $code; check REGISTRY_TOKEN and GITEA_INTERNAL_URL."
+                 exit 1 ;;
+          esac
 
       - name: Install the Docker CLI
+        if: steps.changes.outputs.build == 'true' || steps.release.outputs.new == 'true'
         run: |
           if ! command -v docker >/dev/null 2>&1; then
             # download.docker.com names its folders after uname -m (x86_64, aarch64).
@@ -88,6 +178,7 @@ jobs:
           docker buildx version
 
       - name: Find the Docker daemon
+        if: steps.changes.outputs.build == 'true' || steps.release.outputs.new == 'true'
         env:
           CONFIGURED: ${{ vars.DOCKER_HOST }}
           CERT_PATH: ${{ vars.DOCKER_CERT_PATH || '/certs/client' }}
@@ -130,51 +221,13 @@ jobs:
           echo "::error::No Docker daemon reachable from the job container. Check that /var/run/docker.sock is listed under container.valid_volumes in the runner's config.yaml (see docs/development.md), or mount the dind client certificates and set DOCKER_HOST to tcp://docker:2376."
           exit 1
 
-      - name: Work out the version and image name
-        id: meta
-        env:
-          SERVER_URL: ${{ gitea.server_url }}
-          REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
-          INTERNAL_URL: ${{ vars.GITEA_INTERNAL_URL }}
-          REPOSITORY: ${{ gitea.repository }}
-          SHA: ${{ gitea.sha }}
-        run: |
-          # VERSION is the only place the version is written down.
-          version="$(tr -d '[:space:]' < VERSION)"
-          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "VERSION must look like 1.2.3, found '$version'" >&2
-            exit 1
-          fi
-          # Every version needs a CHANGELOG.md entry; it becomes the release notes.
-          scripts/release-notes.sh "$version" > /dev/null
-
-          # Registry host: the server URL without scheme and path, unless set.
-          # A plain-http name (e.g. gitea-server:3000) must be in the dind
-          # daemon's --insecure-registry list.
-          registry="${REGISTRY_HOST:-${SERVER_URL#*://}}"
-          registry="${registry#*://}"
-          registry="${registry%%/*}"
-
-          # Image names must be lowercase.
-          image="${registry}/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-
-          api="${INTERNAL_URL:-$SERVER_URL}"
-
-          {
-            echo "version=$version"
-            echo "registry=$registry"
-            echo "image=$image"
-            echo "short_sha=${SHA:0:7}"
-            echo "api=${api%/}"
-          } >> "$GITHUB_OUTPUT"
-
-          echo "Version $version, image $image"
-
       - name: Run the tests
         # The Dockerfile's test stage runs the unit tests in the real image.
+        if: steps.changes.outputs.build == 'true'
         run: docker build --target test .
 
       - name: Build the image
+        if: steps.changes.outputs.build == 'true'
         run: >
           docker build
           --build-arg VERSION=${{ steps.meta.outputs.version }}
@@ -182,32 +235,8 @@ jobs:
           --tag ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
           .
 
-      - name: Is this version already released?
-        id: release
-        if: gitea.event_name != 'pull_request' && gitea.ref == 'refs/heads/main'
-        env:
-          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::The REGISTRY_TOKEN secret is not set (Gitea access token with write:package and write:repository)."
-            exit 1
-          fi
-
-          code="$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Authorization: token $TOKEN" \
-            "${{ steps.meta.outputs.api }}/api/v1/repos/${{ gitea.repository }}/releases/tags/v${{ steps.meta.outputs.version }}")"
-
-          case "$code" in
-            200) echo "new=false" >> "$GITHUB_OUTPUT"
-                 echo "v${{ steps.meta.outputs.version }} is already released; publishing latest only." ;;
-            404) echo "new=true" >> "$GITHUB_OUTPUT"
-                 echo "v${{ steps.meta.outputs.version }} is new; it will be released." ;;
-            *)   echo "::error::Gitea API answered HTTP $code; check REGISTRY_TOKEN and GITEA_INTERNAL_URL."
-                 exit 1 ;;
-          esac
-
       - name: Push the image
-        if: steps.release.outcome == 'success'
+        if: steps.release.outcome == 'success' && (steps.changes.outputs.build == 'true' || steps.release.outputs.new == 'true')
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
           USER: ${{ gitea.actor }}
@@ -215,8 +244,13 @@ jobs:
           image="${{ steps.meta.outputs.image }}"
           echo "$TOKEN" | docker login "${{ steps.meta.outputs.registry }}" -u "$USER" --password-stdin
 
-          docker push "$image:latest"
-          docker push "$image:sha-${{ steps.meta.outputs.short_sha }}"
+          if [ "${{ steps.changes.outputs.build }}" = "true" ]; then
+            docker push "$image:latest"
+            docker push "$image:sha-${{ steps.meta.outputs.short_sha }}"
+          else
+            # New version, same image: give the published :latest its version.
+            docker pull "$image:latest"
+          fi
 
           # The version tag is pushed once, with the release, so it never
           # changes after people start using it.

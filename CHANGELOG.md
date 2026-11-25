@@ -8,6 +8,10 @@ Every release has a section here, newest first. Add it in the same commit that b
 
 - This changelog. Each release's notes on Gitea and GitHub now come from its section here.
 
+### Changed
+
+- Pushes that only change docs, the Home Assistant blueprint or the examples no longer rebuild the image. A new version without image changes is released by tagging the existing image with it.
+
 ## [0.3.0] - 2026-11-25
 
 ### Added
