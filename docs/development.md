@@ -45,7 +45,7 @@ On every push to `main`, the workflow on Gitea:
 2. builds the image and pushes `:latest` and `:sha-<commit>`,
 3. if `vX.Y.Z` (from `VERSION`) has no release yet, also pushes `:X.Y.Z` and creates the release.
 
-So to release, bump `VERSION` in the same commit as the change. A version tag is pushed only once and never changes afterwards.
+So to release, bump `VERSION` in the same commit as the change. If that change touches the Home Assistant blueprint, also set the version in its `name:` (and the first line of its description) to the new `VERSION`, so users can see there is an update to import. Leave it alone otherwise. A version tag is pushed only once and never changes afterwards.
 
 Pull requests are built and tested but nothing is published.
 

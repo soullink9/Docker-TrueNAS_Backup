@@ -51,6 +51,8 @@ The webhook only accepts requests from your local network (`local_only`); the pr
 
 ## Updating the blueprint
 
+The blueprint's version is in its name, e.g. **TrueNAS weekly backup alerts v0.3.0** in Settings > Automations & scenes > Blueprints. It is the release in which the blueprint last changed, so it only goes up when there is something new to import. Compare it with the name at the top of [`homeassistant/truenas-backup.yaml`](../homeassistant/truenas-backup.yaml) on GitHub.
+
 Home Assistant remembers the URL it was imported from (the file itself also names the GitHub copy as its source). After a new release, open Settings > Automations & scenes > Blueprints, use the blueprint's menu > **Re-import blueprint**, and the automation picks up the change. Your field values stay as they are.
 
 ## What the container sends

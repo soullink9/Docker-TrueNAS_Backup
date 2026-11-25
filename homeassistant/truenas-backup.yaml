@@ -1,7 +1,10 @@
+# Blueprint version: the release in which this file last changed. It is part
+# of the name, because Home Assistant has no version field for blueprints, so
+# the blueprint list shows it. Change it only when this file changes.
 blueprint:
-  name: TrueNAS weekly backup alerts
+  name: TrueNAS weekly backup alerts v0.3.0
   description: >-
-    Alerts for Docker-TrueNAS_Backup. The container posts every backup result
+    Version 0.3.0. Alerts for Docker-TrueNAS_Backup. The container posts every backup result
     to this automation's webhook. Failures and warnings are pushed to your
     phone straight away; successes are recorded and can be pushed too.
 
