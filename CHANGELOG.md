@@ -2,6 +2,16 @@
 
 Every release has a section here, newest first. Add it in the same commit that bumps `VERSION`: the build fails without one, and the section becomes the release notes on Gitea and GitHub.
 
+## [0.3.2] - 2026-11-25
+
+### Changed
+
+- Updated dependencies to their latest versions:
+  - Base image `python:3.13-alpine` -> `python:3.15-alpine` (Python 3.15, Alpine 3.24).
+  - `websocket-client` now requires 1.9.2 or newer (still below 2).
+  - `actions/checkout` v4 -> v6 in the Gitea and GitHub workflows.
+  - Gitea workflow: Docker CLI 27.5.1 -> 29.10.1, buildx 0.19.3 -> 0.39.1.
+
 ## [0.3.1] - 2026-11-25
 
 ### Added

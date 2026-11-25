@@ -4,7 +4,7 @@
 # ---------------------------------------------------------------------------
 # runtime: everything the backup cycle needs
 # ---------------------------------------------------------------------------
-FROM python:3.13-alpine AS runtime
+FROM python:3.15-alpine AS runtime
 
 # Set by the build workflow from the VERSION file.
 ARG VERSION=dev

@@ -39,8 +39,8 @@ env:
   # The job image (node:22-bookworm) has no Docker CLI, so Docker's official
   # static client and its buildx plugin (BuildKit builds) are fetched. Only
   # the client side: the daemon is the runner's (docker:dind).
-  DOCKER_CLI_VERSION: "27.5.1"
-  BUILDX_VERSION: "0.19.3"
+  DOCKER_CLI_VERSION: "29.10.1"
+  BUILDX_VERSION: "0.39.1"
 
 # With a job-level container: the runner's default shell is plain sh, but the
 # steps use bash (arrays, ${VAR:0:7}). node:22-bookworm has bash.
@@ -63,7 +63,7 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0    # the whole history, to see what a push changed
 
