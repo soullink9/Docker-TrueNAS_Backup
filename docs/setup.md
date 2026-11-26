@@ -32,9 +32,10 @@ A common setup without IPMI is Wake-on-LAN to power on and the backup box's API 
    ```
 
    It should print `Chassis Power is off` or `on`. If it times out, check the BMC cable and that UDP port 623 is open between the boxes.
+
 ### Wake-on-LAN (optional)
 
-4. WOL must be on in the BIOS. Linux can switch it off on the card, so on the backup box add System > Advanced Settings > Init/Shutdown Scripts: type Command, When Post Init, `ethtool -s <interface> wol g` (e.g. `eno1`). Note that port's MAC for `WOL_MAC`.
+4. WOL must be on in the BIOS. Linux can switch it off on the card, so on the backup box add System > Advanced Settings > Init/Shutdown Scripts: type Command, When Post Init, `ethtool -s <interface> wol g` (e.g. `eno1`). Note that port's MAC for `WOL_MAC`. Step-by-step for an ASRock Rack X570D4U-2L2T, including the BIOS settings and which port to use: [Wake-on-LAN on the X570D4U-2L2T](wake-on-lan-x570d4u-2l2t.md).
 
 ### Backup box API key (optional, for `api` shutdown)
 

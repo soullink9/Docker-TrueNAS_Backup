@@ -31,6 +31,7 @@ Imports the alert blueprint from GitHub into Home Assistant 2026.11 or later. To
 ## Learn more
 
 - [Setup](docs/setup.md): preparing both boxes, the API key, compose, every setting, running it by hand
+- [Wake-on-LAN on an ASRock Rack X570D4U-2L2T](docs/wake-on-lan-x570d4u-2l2t.md): BIOS, the right port, and keeping WOL on in TrueNAS
 - [Home Assistant](docs/home-assistant.md): the blueprint, phone alerts and the missed-run check
 - [Development](docs/development.md): building, tests, versions and releases
 - [Changelog](CHANGELOG.md): what changed in each release

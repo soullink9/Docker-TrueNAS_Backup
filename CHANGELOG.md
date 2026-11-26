@@ -2,6 +2,12 @@
 
 Every release has a section here, newest first. Add it in the same commit that bumps `VERSION`: the build fails without one, and the section becomes the release notes on Gitea and GitHub.
 
+## [0.3.3] - 2026-11-26
+
+### Added
+
+- Docs: [Wake-on-LAN on an ASRock Rack X570D4U-2L2T](docs/wake-on-lan-x570d4u-2l2t.md). The BIOS settings, why to use an i210 1GbE port rather than the 10GbE X550 ports, finding the interface and MAC, keeping Wake-on-LAN on in TrueNAS 25.10 with an init script, testing it, and how it fits with IPMI in `POWER_ON_ORDER`. Docs only: the image is not rebuilt.
+
 ## [0.3.2] - 2026-11-25
 
 ### Changed
