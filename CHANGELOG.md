@@ -2,6 +2,12 @@
 
 Every release has a section here, newest first. Add it in the same commit that bumps `VERSION`: the build fails without one, and the section becomes the release notes on Gitea and GitHub.
 
+## [0.3.4] - 2026-11-26
+
+### Fixed
+
+- Docs: [Wake-on-LAN on an ASRock Rack X570D4U-2L2T](docs/wake-on-lan-x570d4u-2l2t.md) said to use an i210 1GbE port. Per ASRock's manual only the 10GbE ports (LAN3/LAN4, Intel X550) wake the board from off, so it now says to use those. The BIOS settings now match the manual's names and menu paths (PCIE Devices Power On, Onboard X550 LAN1/LAN2, Restore AC Power Loss; this board has no Deep S5 or ErP setting). Added the switch-port link-speed gotcha, a Shutdown init script and a step-by-step troubleshooting list. Docs only: the image is not rebuilt.
+
 ## [0.3.3] - 2026-11-26
 
 ### Added
